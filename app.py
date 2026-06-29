@@ -16,16 +16,23 @@ SYSTEM_PROMPT = (
     "the correct name, location, or details, or rephrase your query and retry "
     "the failing tool. Only ask the user for clarification after you have tried "
     "at least one alternative approach. "
-    "At the start of a conversation, use the memory tool (action='list' or "
-    "'recall') to check for relevant saved notes before assuming you don't know "
-    "something. When the user shares information worth remembering for next "
-    "time (preferences, facts about them, ongoing tasks), proactively save it "
-    "with the memory tool."
+    "When the user shares information worth remembering for next time "
+    "(preferences, facts about them, ongoing tasks), proactively save it with "
+    "the memory tool. If a single message contains multiple distinct facts "
+    "(e.g. their name AND a preference), call the memory tool once per fact, "
+    "each with its own key, rather than saving only one of them. Use a "
+    "descriptive snake_case key naming the fact itself (e.g. 'user_name', "
+    "'temperature_unit_preference'), not the value, so you can reliably "
+    "recall it later."
 )
 
 # Keep chat history across messages
 if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    saved_memory = dispatch["memory"](action="list")
+    st.session_state.messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": f"Saved notes from previous conversations:\n{saved_memory}"},
+    ]
 
 # Display chat history
 for msg in st.session_state.messages:
