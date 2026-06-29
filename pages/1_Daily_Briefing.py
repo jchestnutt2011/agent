@@ -24,5 +24,14 @@ else:
     st.caption(f"Generated at {data['generated_at']}")
     st.markdown(data["text"])
 
+    st.subheader("Reddit Highlights")
+    for subreddit, posts in data.get("reddit", {}).items():
+        st.markdown(f"**r/{subreddit}**")
+        if isinstance(posts, str):
+            st.markdown(f"_{posts}_")
+        else:
+            for post in posts:
+                st.markdown(f"- [{post['title']}]({post['url']})")
+
     with st.expander("Raw data used for this briefing"):
         st.json(data["raw"])

@@ -29,15 +29,16 @@ SCHEMA = {
 }
 
 
-def run(subreddit, limit=5):
+def fetch_posts(subreddit, limit=5):
+    """Returns a list of {'title', 'url'} dicts, or a string error message."""
     url = f"https://www.reddit.com/r/{subreddit}/top/.rss"
 
     resp = None
-    for attempt in range(3):
+    for attempt in range(5):
         resp = requests.get(url, params={"t": "day", "limit": limit}, headers=HEADERS, timeout=10)
         if resp.status_code != 429:
             break
-        time.sleep(5 * (attempt + 1))
+        time.sleep(15 * (attempt + 1))
 
     if resp.status_code != 200:
         return f"Could not fetch r/{subreddit}: HTTP {resp.status_code}"
@@ -47,11 +48,18 @@ def run(subreddit, limit=5):
     if not entries:
         return f"No posts found for r/{subreddit}."
 
-    lines = []
+    posts = []
     for entry in entries:
         title = entry.findtext(f"{ATOM_NS}title", default="(no title)")
         link_el = entry.find(f"{ATOM_NS}link")
         link = link_el.get("href") if link_el is not None else ""
-        lines.append(f"- {title} ({link})")
+        posts.append({"title": title, "url": link})
+    return posts
 
+
+def run(subreddit, limit=5):
+    posts = fetch_posts(subreddit, limit)
+    if isinstance(posts, str):
+        return posts
+    lines = [f"- {p['title']} ({p['url']})" for p in posts]
     return f"Top posts in r/{subreddit} (past 24h):\n" + "\n".join(lines)
