@@ -2,6 +2,7 @@ venv/
 __pycache__/
 *.pyc
 agent_memory.json
+briefing.json
 weather_log.txt
 *.log
 .claude/
