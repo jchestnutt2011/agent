@@ -41,9 +41,12 @@ for msg in st.session_state.messages:
             st.write(msg["content"])
 
 
+MAX_TOOL_ITERATIONS = 8
+
+
 def run_turn(messages):
     """Call the model, executing any tool calls, until it returns a final answer."""
-    while True:
+    for _ in range(MAX_TOOL_ITERATIONS):
         response = ollama.chat(model=MODEL, messages=messages, tools=schemas)
         msg = response["message"]
         messages.append(msg)
@@ -65,6 +68,8 @@ def run_turn(messages):
                     except Exception as e:
                         result = f"Tool {name} failed: {e}"
             messages.append({"role": "tool", "content": str(result)})
+
+    return "I wasn't able to finish that after several tool calls — could you rephrase or simplify the request?"
 
 
 # Chat input

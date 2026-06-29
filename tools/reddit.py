@@ -34,7 +34,7 @@ def fetch_posts(subreddit, limit=5):
     url = f"https://www.reddit.com/r/{subreddit}/top/.rss"
 
     resp = None
-    for attempt in range(5):
+    for attempt in range(3):
         resp = requests.get(url, params={"t": "day", "limit": limit}, headers=HEADERS, timeout=10)
         if resp.status_code != 429:
             break

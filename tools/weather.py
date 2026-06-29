@@ -2,6 +2,20 @@ import re
 
 import requests
 
+# WMO weather interpretation codes used by Open-Meteo's current_weather field.
+WMO_CODES = {
+    0: "clear sky", 1: "mainly clear", 2: "partly cloudy", 3: "overcast",
+    45: "fog", 48: "freezing fog",
+    51: "light drizzle", 53: "moderate drizzle", 55: "dense drizzle",
+    56: "light freezing drizzle", 57: "dense freezing drizzle",
+    61: "slight rain", 63: "moderate rain", 65: "heavy rain",
+    66: "light freezing rain", 67: "heavy freezing rain",
+    71: "slight snow", 73: "moderate snow", 75: "heavy snow", 77: "snow grains",
+    80: "slight rain showers", 81: "moderate rain showers", 82: "violent rain showers",
+    85: "slight snow showers", 86: "heavy snow showers",
+    95: "thunderstorm", 96: "thunderstorm with slight hail", 99: "thunderstorm with heavy hail",
+}
+
 SCHEMA = {
     "type": "function",
     "function": {
@@ -69,7 +83,8 @@ def run(location):
     if not current:
         return f"Could not retrieve weather for {label}."
 
+    condition = WMO_CODES.get(current["weathercode"], f"code {current['weathercode']}")
     return (
         f"Weather in {label}: {current['temperature']}°F, "
-        f"wind {current['windspeed']} mph, code {current['weathercode']}"
+        f"wind {current['windspeed']} mph, {condition}"
     )

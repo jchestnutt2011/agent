@@ -14,8 +14,14 @@ st.title("Daily Briefing")
 
 if st.button("Regenerate now"):
     with st.spinner("Generating briefing... this can take a minute"):
-        subprocess.run([sys.executable, str(SCRIPT)], cwd=BASE_DIR, check=True)
-    st.rerun()
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT)], cwd=BASE_DIR, capture_output=True, text=True
+        )
+    if result.returncode != 0:
+        st.error("Briefing generation failed. See details below.")
+        st.code(result.stderr or result.stdout)
+    else:
+        st.rerun()
 
 if not BRIEFING_FILE.exists():
     st.info("No briefing generated yet. Click 'Regenerate now' to create one.")

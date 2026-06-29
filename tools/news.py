@@ -1,8 +1,38 @@
+import re
 from datetime import datetime, timedelta, timezone
 
 from ddgs import DDGS
 
 MAX_AGE_DAYS = 14
+
+# ddgs.news() reports dates inconsistently depending on source: sometimes a full
+# ISO timestamp, sometimes a relative string like "7h", "16h", "2d", "3mo".
+RELATIVE_UNITS = {
+    "min": "minutes", "m": "minutes",
+    "h": "hours",
+    "d": "days",
+    "mo": "days",  # approximate a month as 30 days, good enough for a freshness filter
+    "y": "days",
+}
+
+
+def _parse_date(date_str):
+    try:
+        return datetime.fromisoformat(date_str)
+    except ValueError:
+        pass
+
+    match = re.fullmatch(r"(\d+)\s*(min|mo|[mhdy])", date_str.strip())
+    if not match:
+        return None
+    amount, unit = match.groups()
+    amount = int(amount)
+    if unit == "mo":
+        amount *= 30
+    elif unit == "y":
+        amount *= 365
+    kwarg = RELATIVE_UNITS[unit]
+    return datetime.now(timezone.utc) - timedelta(**{kwarg: amount})
 
 SCHEMA = {
     "type": "function",
@@ -29,9 +59,11 @@ def run(query, max_results=5):
     cutoff = datetime.now(timezone.utc) - timedelta(days=MAX_AGE_DAYS)
     fresh = []
     for r in results:
-        try:
-            published = datetime.fromisoformat(r["date"])
-        except (KeyError, ValueError):
+        date_str = r.get("date")
+        if not date_str:
+            continue
+        published = _parse_date(date_str)
+        if published is None:
             continue
         if published >= cutoff:
             fresh.append((published, r))
