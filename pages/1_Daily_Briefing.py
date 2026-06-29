@@ -6,8 +6,11 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+from tools.stocks import get_major_indices, get_watchlist
+
 BASE_DIR = Path(__file__).parent.parent
 BRIEFING_FILE = BASE_DIR / "briefing.json"
+CONFIG_FILE = BASE_DIR / "briefing_config.json"
 SCRIPT = BASE_DIR / "daily_briefing.py"
 
 st.set_page_config(page_title="Daily Briefing", page_icon="📰", layout="wide")
@@ -78,16 +81,28 @@ def quotes_to_dataframe(quotes, include_market_cap=False, sort_by_pct_change=Fal
     return pd.DataFrame(rows)
 
 
-tab_weather, tab_markets, tab_news, tab_reddit = st.tabs(
-    ["☀️ Weather", "📈 Markets", "📰 News", "👽 Reddit"]
-)
+@st.cache_data(ttl=900)
+def fetch_live_markets(tickers):
+    """Cached for 15 minutes — independent of the once-daily briefing snapshot,
+    since market data is cheap to fetch live (unlike Reddit/news, which are slow
+    and rate-limited)."""
+    return {
+        "indices": get_major_indices(),
+        "watchlist": get_watchlist(list(tickers)) if tickers else [],
+    }
 
-with tab_weather:
-    for line in data.get("weather", []):
-        st.markdown(f"- {line}")
 
-with tab_markets:
-    markets = data.get("markets", {})
+@st.fragment(run_every="15m")
+def render_markets_tab():
+    config = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+    markets = fetch_live_markets(tuple(config.get("tickers", [])))
+
+    refresh_col, _ = st.columns([1, 4])
+    with refresh_col:
+        if st.button("Refresh now", key="refresh_markets"):
+            fetch_live_markets.clear()
+            st.rerun(scope="fragment")
+    st.caption("Live — auto-refreshes every 15 minutes while this page is open")
 
     st.subheader("Major Indices")
     indices = markets.get("indices", [])
@@ -115,6 +130,18 @@ with tab_markets:
         st.dataframe(styled, hide_index=True, use_container_width=True)
     else:
         st.caption("No individual tickers tracked yet — add some to briefing_config.json.")
+
+
+tab_weather, tab_markets, tab_news, tab_reddit = st.tabs(
+    ["☀️ Weather", "📈 Markets", "📰 News", "👽 Reddit"]
+)
+
+with tab_weather:
+    for line in data.get("weather", []):
+        st.markdown(f"- {line}")
+
+with tab_markets:
+    render_markets_tab()
 
 with tab_news:
     st.markdown(data.get("news_text", "No news available."))
