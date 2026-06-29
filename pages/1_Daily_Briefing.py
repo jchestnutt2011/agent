@@ -32,39 +32,50 @@ data = json.loads(BRIEFING_FILE.read_text(encoding="utf-8"))
 st.caption(f"Generated at {data['generated_at']}")
 
 
-def quotes_to_dataframe(quotes, include_market_cap=False):
-    rows = []
-    for q in quotes:
-        if q.get("error"):
-            rows.append({"Name": q["label"], "Symbol": q.get("symbol", ""), "Price": "unavailable"})
-            continue
-        row = {
-            "Name": q["label"],
-            "Symbol": q["symbol"],
-            "Price": f"${q['price']:.2f}",
-            "Change": f"{'+' if q['change'] >= 0 else ''}{q['change']:.2f}",
-            "% Change": f"{'+' if q['pct_change'] >= 0 else ''}{q['pct_change']:.2f}%",
-            "Day Range": (
-                f"${q['day_low']:.2f} - ${q['day_high']:.2f}"
-                if q.get("day_low") is not None and q.get("day_high") is not None
-                else "—"
-            ),
-            "Volume": f"{q['volume']:,}" if q.get("volume") else "—",
-        }
-        if include_market_cap:
-            row["Market Cap"] = _format_market_cap(q.get("market_cap"))
-        rows.append(row)
-    return pd.DataFrame(rows)
-
-
-def _format_market_cap(value):
+def _format_compact(value):
+    """Abbreviate large numbers (volume, market cap) to T/B/M, no decimals below 1M."""
     if not value:
         return "—"
     if value >= 1e12:
-        return f"${value / 1e12:.2f}T"
+        return f"{value / 1e12:.2f}T"
     if value >= 1e9:
-        return f"${value / 1e9:.2f}B"
-    return f"${value / 1e6:.2f}M"
+        return f"{value / 1e9:.2f}B"
+    if value >= 1e6:
+        return f"{value / 1e6:.2f}M"
+    return f"{value:,.0f}"
+
+
+def quotes_to_dataframe(quotes, include_market_cap=False, sort_by_pct_change=False):
+    valid = [q for q in quotes if not q.get("error")]
+    errored = [q for q in quotes if q.get("error")]
+
+    if sort_by_pct_change:
+        valid = sorted(valid, key=lambda q: q["pct_change"], reverse=True)
+
+    rows = []
+    for q in valid:
+        sign = "+" if q["change"] >= 0 else "-"
+        row = {
+            "Name": q["label"],
+            "Symbol": q["symbol"],
+            "Price": f"${q['price']:,.2f}",
+            "Change": f"{sign}${abs(q['change']):,.2f}",
+            "% Change": f"{'+' if q['pct_change'] >= 0 else ''}{q['pct_change']:.2f}%",
+            "Day Range": (
+                f"${q['day_low']:,.2f} - ${q['day_high']:,.2f}"
+                if q.get("day_low") is not None and q.get("day_high") is not None
+                else "—"
+            ),
+            "Volume": _format_compact(q.get("volume")),
+        }
+        if include_market_cap:
+            row["Market Cap"] = "$" + _format_compact(q.get("market_cap")) if q.get("market_cap") else "—"
+        rows.append(row)
+
+    for q in errored:
+        rows.append({"Name": q["label"], "Symbol": q.get("symbol", ""), "Price": "unavailable"})
+
+    return pd.DataFrame(rows)
 
 
 tab_weather, tab_markets, tab_news, tab_reddit = st.tabs(
@@ -87,7 +98,10 @@ with tab_markets:
     watchlist = markets.get("watchlist", [])
     if watchlist:
         st.subheader("Watchlist")
-        df = quotes_to_dataframe(watchlist, include_market_cap=True)
+        sort_by_movers = st.toggle("Sort by % change (biggest movers first)", value=False)
+        df = quotes_to_dataframe(
+            watchlist, include_market_cap=True, sort_by_pct_change=sort_by_movers
+        )
 
         def highlight_change(row):
             color = ""
