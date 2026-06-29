@@ -7,6 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from tools.stocks import get_major_indices, get_watchlist
+from tools.weather import get_conditions
 
 BASE_DIR = Path(__file__).parent.parent
 BRIEFING_FILE = BASE_DIR / "briefing.json"
@@ -82,6 +83,73 @@ def quotes_to_dataframe(quotes, include_market_cap=False, sort_by_pct_change=Fal
 
 
 @st.cache_data(ttl=900)
+def fetch_live_weather(locations):
+    """Cached for 15 minutes, same reasoning as markets — cheap to fetch live,
+    no reason to wait for the once-daily snapshot. Returns a dict per location,
+    each either real conditions or an {'error': ...} dict — never raises, so a
+    single bad/unreachable location can't take down the whole tab."""
+    results = {}
+    for loc in locations:
+        try:
+            results[loc] = get_conditions(loc)
+        except Exception as e:
+            results[loc] = {"error": f"Unexpected error fetching weather for {loc}: {e}"}
+    return results
+
+
+@st.fragment(run_every="15m")
+def render_weather_tab():
+    config = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+    locations = config.get("locations", [])
+
+    refresh_col, _ = st.columns([1, 4])
+    with refresh_col:
+        if st.button("Refresh now", key="refresh_weather"):
+            fetch_live_weather.clear()
+            st.rerun(scope="fragment")
+    st.caption("Live — auto-refreshes every 15 minutes while this page is open")
+
+    if not locations:
+        st.caption("No locations configured yet — add some to briefing_config.json.")
+        return
+
+    weather = fetch_live_weather(tuple(locations))
+
+    for loc in locations:
+        info = weather.get(loc, {})
+        st.subheader(loc)
+
+        if "error" in info:
+            st.warning(info["error"])
+            continue
+
+        cols = st.columns(4)
+        cols[0].metric("Temperature", f"{info['temperature']:.0f}°F")
+        if info.get("feels_like") is not None:
+            cols[1].metric("Feels Like", f"{info['feels_like']:.0f}°F")
+        if info.get("humidity") is not None:
+            cols[2].metric("Humidity", f"{info['humidity']}%")
+        if info.get("wind_speed") is not None:
+            direction = f" {info['wind_direction']}" if info.get("wind_direction") else ""
+            cols[3].metric("Wind", f"{info['wind_speed']:.0f} mph{direction}")
+        st.caption(info["condition"].capitalize())
+
+        forecast = info.get("forecast", [])
+        if forecast:
+            rows = []
+            for day in forecast:
+                rows.append({
+                    "Date": day["date"],
+                    "Condition": day["condition"].capitalize(),
+                    "High": f"{day['high']:.0f}°F",
+                    "Low": f"{day['low']:.0f}°F",
+                    "Rain Chance": f"{day['precip_chance']}%",
+                    "UV Index": f"{day['uv_index']:.1f}",
+                })
+            st.dataframe(pd.DataFrame(rows), hide_index=True, width='stretch')
+
+
+@st.cache_data(ttl=900)
 def fetch_live_markets(tickers):
     """Cached for 15 minutes — independent of the once-daily briefing snapshot,
     since market data is cheap to fetch live (unlike Reddit/news, which are slow
@@ -108,7 +176,7 @@ def render_markets_tab():
     indices = markets.get("indices", [])
     if indices:
         df = quotes_to_dataframe(indices)
-        st.dataframe(df, hide_index=True, use_container_width=True)
+        st.dataframe(df, hide_index=True, width='stretch')
 
     watchlist = markets.get("watchlist", [])
     if watchlist:
@@ -127,7 +195,7 @@ def render_markets_tab():
             return [color] * len(row)
 
         styled = df.style.apply(highlight_change, axis=1)
-        st.dataframe(styled, hide_index=True, use_container_width=True)
+        st.dataframe(styled, hide_index=True, width='stretch')
     else:
         st.caption("No individual tickers tracked yet — add some to briefing_config.json.")
 
@@ -137,8 +205,7 @@ tab_weather, tab_markets, tab_news, tab_reddit = st.tabs(
 )
 
 with tab_weather:
-    for line in data.get("weather", []):
-        st.markdown(f"- {line}")
+    render_weather_tab()
 
 with tab_markets:
     render_markets_tab()
