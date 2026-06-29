@@ -1,5 +1,5 @@
 {
   "locations": ["Durham, NC", "Topsail Island, NC"],
   "subreddits": ["gaming", "mmorpg", "pathofexile", "worldnews"],
-  "tickers": []
+  "tickers": ["AAPL", "MSFT", "GOOGL", "NVDA", "AMZN", "META", "TSLA"]
 }

@@ -3,17 +3,18 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pandas as pd
 import streamlit as st
 
 BASE_DIR = Path(__file__).parent.parent
 BRIEFING_FILE = BASE_DIR / "briefing.json"
 SCRIPT = BASE_DIR / "daily_briefing.py"
 
-st.set_page_config(page_title="Daily Briefing", page_icon="📰")
+st.set_page_config(page_title="Daily Briefing", page_icon="📰", layout="wide")
 st.title("Daily Briefing")
 
 if st.button("Regenerate now"):
-    with st.spinner("Generating briefing... this can take a minute"):
+    with st.spinner("Generating briefing... this can take a few minutes"):
         result = subprocess.run(
             [sys.executable, str(SCRIPT)], cwd=BASE_DIR, capture_output=True, text=True
         )
@@ -25,12 +26,86 @@ if st.button("Regenerate now"):
 
 if not BRIEFING_FILE.exists():
     st.info("No briefing generated yet. Click 'Regenerate now' to create one.")
-else:
-    data = json.loads(BRIEFING_FILE.read_text(encoding="utf-8"))
-    st.caption(f"Generated at {data['generated_at']}")
-    st.markdown(data["text"])
+    st.stop()
 
-    st.subheader("Reddit Highlights")
+data = json.loads(BRIEFING_FILE.read_text(encoding="utf-8"))
+st.caption(f"Generated at {data['generated_at']}")
+
+
+def quotes_to_dataframe(quotes, include_market_cap=False):
+    rows = []
+    for q in quotes:
+        if q.get("error"):
+            rows.append({"Name": q["label"], "Symbol": q.get("symbol", ""), "Price": "unavailable"})
+            continue
+        row = {
+            "Name": q["label"],
+            "Symbol": q["symbol"],
+            "Price": f"${q['price']:.2f}",
+            "Change": f"{'+' if q['change'] >= 0 else ''}{q['change']:.2f}",
+            "% Change": f"{'+' if q['pct_change'] >= 0 else ''}{q['pct_change']:.2f}%",
+            "Day Range": (
+                f"${q['day_low']:.2f} - ${q['day_high']:.2f}"
+                if q.get("day_low") is not None and q.get("day_high") is not None
+                else "—"
+            ),
+            "Volume": f"{q['volume']:,}" if q.get("volume") else "—",
+        }
+        if include_market_cap:
+            row["Market Cap"] = _format_market_cap(q.get("market_cap"))
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _format_market_cap(value):
+    if not value:
+        return "—"
+    if value >= 1e12:
+        return f"${value / 1e12:.2f}T"
+    if value >= 1e9:
+        return f"${value / 1e9:.2f}B"
+    return f"${value / 1e6:.2f}M"
+
+
+tab_weather, tab_markets, tab_news, tab_reddit = st.tabs(
+    ["☀️ Weather", "📈 Markets", "📰 News", "👽 Reddit"]
+)
+
+with tab_weather:
+    for line in data.get("weather", []):
+        st.markdown(f"- {line}")
+
+with tab_markets:
+    markets = data.get("markets", {})
+
+    st.subheader("Major Indices")
+    indices = markets.get("indices", [])
+    if indices:
+        df = quotes_to_dataframe(indices)
+        st.dataframe(df, hide_index=True, use_container_width=True)
+
+    watchlist = markets.get("watchlist", [])
+    if watchlist:
+        st.subheader("Watchlist")
+        df = quotes_to_dataframe(watchlist, include_market_cap=True)
+
+        def highlight_change(row):
+            color = ""
+            if row["% Change"].startswith("+"):
+                color = "color: limegreen"
+            elif row["% Change"].startswith("-"):
+                color = "color: salmon"
+            return [color] * len(row)
+
+        styled = df.style.apply(highlight_change, axis=1)
+        st.dataframe(styled, hide_index=True, use_container_width=True)
+    else:
+        st.caption("No individual tickers tracked yet — add some to briefing_config.json.")
+
+with tab_news:
+    st.markdown(data.get("news_text", "No news available."))
+
+with tab_reddit:
     for subreddit, posts in data.get("reddit", {}).items():
         st.markdown(f"**r/{subreddit}**")
         if isinstance(posts, str):
@@ -39,5 +114,5 @@ else:
             for post in posts:
                 st.markdown(f"- [{post['title']}]({post['url']})")
 
-    with st.expander("Raw data used for this briefing"):
-        st.json(data["raw"])
+with st.expander("Raw data used for this briefing"):
+    st.json(data.get("raw", {}))
