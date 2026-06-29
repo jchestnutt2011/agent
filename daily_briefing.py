@@ -58,7 +58,9 @@ def synthesize(raw_data):
         "You are writing a concise daily briefing for a person, based on the raw "
         "data below. Organize it into clear sections with short headers: Weather, "
         "Markets, and News. Keep it skimmable — use bullet points, no fluff, no "
-        "repeating the raw data verbatim. Write in Markdown.\n\n"
+        "repeating the raw data verbatim. Each news item includes a [YYYY-MM-DD] "
+        "publish date — keep that date visible in your bullet so the reader can "
+        "judge freshness. Write in Markdown.\n\n"
         f"Raw data:\n{raw_text}"
     )
     response = ollama.chat(model=MODEL, messages=[{"role": "user", "content": prompt}])
