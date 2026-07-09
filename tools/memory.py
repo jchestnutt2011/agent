@@ -1,3 +1,4 @@
+import difflib
 import json
 from pathlib import Path
 
@@ -45,7 +46,21 @@ def _load():
 
 
 def _save(data):
-    MEMORY_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp_file = MEMORY_FILE.with_suffix(".tmp")
+    tmp_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp_file.replace(MEMORY_FILE)
+
+
+def _closest_key(key, data):
+    """Fall back to a fuzzy/substring match so recall survives the model asking
+    for a slightly different key than the one it originally saved under."""
+    if not data:
+        return None
+    substring_matches = [k for k in data if key.lower() in k.lower() or k.lower() in key.lower()]
+    if len(substring_matches) == 1:
+        return substring_matches[0]
+    close = difflib.get_close_matches(key, data.keys(), n=1, cutoff=0.6)
+    return close[0] if close else None
 
 
 def run(action, key=None, value=None):
@@ -61,9 +76,12 @@ def run(action, key=None, value=None):
     if action == "recall":
         if not key:
             return "recall requires 'key'."
-        if key not in data:
-            return f"No memory found for '{key}'."
-        return data[key]
+        if key in data:
+            return data[key]
+        fallback = _closest_key(key, data)
+        if fallback:
+            return f"(closest match: '{fallback}') {data[fallback]}"
+        return f"No memory found for '{key}'."
 
     if action == "list":
         if not data:
