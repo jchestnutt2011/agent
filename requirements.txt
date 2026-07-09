@@ -1,5 +1,6 @@
-ollama
-streamlit
-requests
-ddgs
-yfinance
+ollama==0.6.2
+streamlit==1.58.0
+requests==2.34.2
+ddgs==9.14.4
+yfinance==1.5.1
+pandas==3.0.3
