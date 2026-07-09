@@ -5,6 +5,7 @@ from pathlib import Path
 
 import ollama
 
+from config import MODEL
 from tools.weather import run as get_weather
 from tools.news import run as get_news
 from tools.reddit import fetch_posts as get_reddit_posts
@@ -13,7 +14,6 @@ from tools.stocks import get_major_indices, get_watchlist
 BASE_DIR = Path(__file__).parent
 CONFIG_FILE = BASE_DIR / "briefing_config.json"
 OUTPUT_FILE = BASE_DIR / "briefing.json"
-MODEL = "qwen2.5:7b-instruct"
 
 
 def load_config():

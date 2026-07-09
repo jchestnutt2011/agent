@@ -1,12 +1,12 @@
 import streamlit as st
 import ollama
 
+from config import MODEL
 from tool_registry import load_tools
 
 st.set_page_config(page_title="Home Agent", page_icon="🤖")
 st.title("Home Agent")
 
-MODEL = "qwen2.5:7b-instruct"
 schemas, dispatch = load_tools()
 
 SYSTEM_PROMPT = (
