@@ -29,6 +29,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+import state_store
 from tools import telegram_notify
 
 BASE_DIR = Path(__file__).parent
@@ -46,18 +47,11 @@ def _load_config():
 
 
 def _load_state():
-    if not STATE_FILE.exists():
-        return {}
-    try:
-        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
+    return state_store.load_json_state(STATE_FILE)
 
 
 def _save_state(state):
-    tmp_file = STATE_FILE.with_suffix(".tmp")
-    tmp_file.write_text(json.dumps(state, indent=2), encoding="utf-8")
-    tmp_file.replace(STATE_FILE)
+    state_store.save_json_state(STATE_FILE, state)
 
 
 def _tail_has_traceback(log_path):
