@@ -93,24 +93,33 @@ def handle_user_message(prompt):
             st.write(reply)
 
 
-# Voice input. st.audio_input keeps returning the same recording on every
+# Voice input, tucked behind a small mic icon next to the chat bar instead
+# of a full-width recorder — the recorder itself only appears once the icon
+# is clicked. st.audio_input keeps returning the same recording on every
 # rerun until the widget is cleared (unlike st.chat_input, which
 # self-resets after being read once) — dedup by content hash so a recording
 # isn't transcribed and re-sent on every subsequent rerun.
-audio = st.audio_input("🎤 Or record a voice message", key=f"audio_input_{st.session_state.audio_widget_key}")
-if audio is not None:
-    audio_bytes = audio.getvalue()
-    audio_hash = hashlib.md5(audio_bytes).hexdigest()
-    if audio_hash != st.session_state.last_audio_hash:
-        st.session_state.last_audio_hash = audio_hash
-        with st.spinner("Transcribing..."):
-            transcribed = transcribe(audio_bytes)
-        if transcribed:
-            st.session_state.audio_widget_key += 1  # forces a fresh, empty widget next run
-            handle_user_message(transcribed)
-            st.rerun()
-        else:
-            st.warning("Couldn't make out any speech in that recording — try again.")
+_, mic_col = st.columns([12, 1])
+with mic_col:
+    with st.popover("🎤", use_container_width=False):
+        audio = st.audio_input(
+            "Record a voice message",
+            key=f"audio_input_{st.session_state.audio_widget_key}",
+            label_visibility="collapsed",
+        )
+        if audio is not None:
+            audio_bytes = audio.getvalue()
+            audio_hash = hashlib.md5(audio_bytes).hexdigest()
+            if audio_hash != st.session_state.last_audio_hash:
+                st.session_state.last_audio_hash = audio_hash
+                with st.spinner("Transcribing..."):
+                    transcribed = transcribe(audio_bytes)
+                if transcribed:
+                    st.session_state.audio_widget_key += 1  # forces a fresh, empty widget next run
+                    handle_user_message(transcribed)
+                    st.rerun()
+                else:
+                    st.warning("Couldn't make out any speech in that recording — try again.")
 
 # Typed input
 if prompt := st.chat_input("Ask anything..."):
