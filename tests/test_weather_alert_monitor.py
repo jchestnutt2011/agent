@@ -3,27 +3,42 @@ from datetime import datetime, timedelta, timezone
 import weather_alert_monitor as monitor
 
 
-def _alert(id="urn:test:1", event="Beach Hazards Statement", severity="Moderate", expires=None):
+def _alert(id="urn:test:1", event="Beach Hazards Statement", severity="Moderate", expires=None, headline=None):
     return {
         "id": id, "event": event, "severity": severity,
         "urgency": "Expected", "certainty": "Likely",
-        "headline": f"{event} in effect", "description": "Details here.",
+        "headline": headline or f"{event} in effect", "description": "Details here.",
         "expires": expires or (datetime.now(timezone.utc) + timedelta(hours=6)).isoformat(),
     }
 
 
-def test_prune_expired_drops_past_alerts():
+def test_prune_stale_drops_unseen_expired_alerts():
     past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
     future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
     state = {
         "expired-one": {"expires": past},
         "still-active": {"expires": future},
-        "no-expiry": {},
+        "no-expiry-unseen": {},
+        "no-expiry-seen": {},
     }
-    result = monitor._prune_expired(state)
+    result = monitor._prune_stale(state, seen_ids={"no-expiry-seen"})
     assert "expired-one" not in result
     assert "still-active" in result
-    assert "no-expiry" in result
+    assert "no-expiry-unseen" not in result  # can't confirm still active without expires or seeing it again
+    assert "no-expiry-seen" in result
+
+
+def test_prune_stale_keeps_seen_alert_even_past_its_reported_expiry():
+    """NWS's /alerts/active feed can keep serving an alert as active well
+    past its own self-reported `expires` timestamp. Presence in the current
+    fetch (seen_ids) must win over the stale `expires` field — otherwise the
+    entry gets evicted, looks brand new next cycle, and gets re-notified.
+    This is the exact bug that caused a real Beach Hazards Statement to
+    re-send every 15 minutes."""
+    past = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
+    state = {"still-being-served": {"expires": past}}
+    result = monitor._prune_stale(state, seen_ids={"still-being-served"})
+    assert "still-being-served" in result
 
 
 def test_decide_severe_uses_hard_floor_without_calling_model(monkeypatch):
@@ -184,6 +199,62 @@ def test_check_skips_reissued_alert_with_new_id_but_same_content(tmp_path, monke
     state = monitor._load_state()
     assert state["reissued-id"]["notified"] is False
     assert state["reissued-id"]["content_key"] == content_key
+
+
+def test_check_does_not_renotify_alert_whose_reported_expiry_already_passed(tmp_path, monkeypatch):
+    """Reproduces the production bug directly: NWS keeps returning the same
+    alert id as active even though its `expires` field is hours in the past.
+    Before the fix, the old expires-based prune evicted the state entry
+    every cycle, so `check()` treated the still-active alert as new and
+    re-notified it. It must be skipped instead."""
+    monkeypatch.setattr(monitor, "CONFIG_FILE", tmp_path / "briefing_config.json")
+    monkeypatch.setattr(monitor, "STATE_FILE", tmp_path / "alert_monitor_state.json")
+    (tmp_path / "briefing_config.json").write_text('{"locations": ["Topsail Island, NC"]}', encoding="utf-8")
+
+    stale_expiry = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
+    alert = _alert(id="lagging-alert", expires=stale_expiry)
+    monitor._save_state({
+        "lagging-alert": {
+            "location": "Topsail Island, NC", "event": alert["event"],
+            "severity": alert["severity"], "expires": stale_expiry,
+            "decided_by": "local model", "reason": "rip currents", "notified": True,
+        }
+    })
+    monkeypatch.setattr(monitor, "get_alerts_for", lambda loc: {"label": loc, "alerts": [alert]})
+
+    decide_calls = []
+    monkeypatch.setattr(monitor, "_decide", lambda *a: decide_calls.append(a) or (True, "x", "hard floor"))
+    sent_messages = []
+    monkeypatch.setattr(monitor.telegram_notify, "send_message", lambda text: sent_messages.append(text) or True)
+
+    results = monitor.check()
+
+    assert decide_calls == []
+    assert sent_messages == []
+    assert results == []
+    assert "lagging-alert" in monitor._load_state()  # kept, not pruned, since NWS still serves it
+
+
+def test_content_key_ignores_headline_issuance_timestamp():
+    """Real NWS headlines embed a per-reissue timestamp, e.g. 'Beach Hazards
+    Statement issued July 9 at 8:01PM EDT until July 10 at 8:00PM EDT' vs.
+    the same product reissued a bit later with a new 'issued ... at ...'
+    stamp. If the fingerprint included the headline, these would never
+    match and every reissue would re-notify — which is exactly what
+    happened in production before this test was added."""
+    first = _alert(
+        id="a1",
+        headline="Beach Hazards Statement issued July 9 at 8:01PM EDT until July 10 at 8:00PM EDT by NWS Newport/Morehead City NC",
+    )
+    first["description"] = "* WHAT...Dangerous rip currents.\n\n* WHERE...The beaches from Cape Hatteras to Surf City."
+
+    second = _alert(
+        id="a2",
+        headline="Beach Hazards Statement issued July 10 at 2:15AM EDT until July 10 at 8:00PM EDT by NWS Newport/Morehead City NC",
+    )
+    second["description"] = first["description"]
+
+    assert monitor._content_key("Topsail Island, NC", first) == monitor._content_key("Topsail Island, NC", second)
 
 
 def test_check_handles_location_lookup_error(tmp_path, monkeypatch):

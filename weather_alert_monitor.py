@@ -12,7 +12,10 @@ difference — that's exactly the kind of nuance an LLM reading the actual
 description is suited for.
 
 Dedup is by NWS's own alert id, persisted in alert_monitor_state.json, so an
-ongoing alert doesn't get re-evaluated (or re-pinged) every single cycle.
+ongoing alert doesn't get re-evaluated (or re-pinged) every single cycle. A
+state entry sticks around for as long as NWS keeps returning that id in
+/alerts/active — NOT until its self-reported `expires` timestamp, which can
+lag reality by hours. See `_prune_stale`.
 Simplification: this treats each alert id as evaluated exactly once for its
 lifetime — if NWS meaningfully updates an in-place alert without changing its
 id, the update won't trigger a fresh decision. Acceptable for v1; revisit if
@@ -22,9 +25,11 @@ NWS also routinely reissues some products (Beach Hazards Statement, Small
 Craft Advisory, etc.) on a fixed cycle as a brand-new alert id with identical
 content — id-only dedup would treat each reissue as new and re-notify every
 cycle. So alerts are also deduped by a content fingerprint (location + event
-+ headline + description) against every still-active, already-seen alert:
-a content match is recorded (so future reissues of the same text keep
-matching) but never re-decided or re-sent.
++ description) against every still-active, already-seen alert: a content
+match is recorded (so future reissues of the same text keep matching) but
+never re-decided or re-sent. The fingerprint deliberately excludes the
+headline, which always embeds a per-reissue issuance timestamp and would
+otherwise make every reissue hash differently.
 """
 
 import hashlib
@@ -65,22 +70,35 @@ def _save_state(state):
     tmp_file.replace(STATE_FILE)
 
 
-def _prune_expired(state):
-    """Drop entries for alerts that have already expired, so the state file
-    doesn't grow forever and an old id can never block a genuinely new alert
-    that happens to reuse... well, ids don't repeat, but there's no reason to
-    keep expired entries around either."""
+def _prune_stale(state, seen_ids):
+    """Drop state entries for alerts NWS is no longer actively serving, so the
+    state file doesn't grow forever.
+
+    Presence in the latest fetch (`seen_ids`) is the authoritative "still
+    active" signal — NOT the alert's self-reported `expires` field, which can
+    lag well behind reality. This was a real bug: an alert's `expires` had
+    already passed by several hours while NWS's /alerts/active feed kept
+    serving it as active with the same id. Pruning by `expires` alone evicted
+    it from state every cycle, so it looked brand new on the next 15-minute
+    run and got re-decided and re-notified over and over.
+
+    `expires` is now only a fallback for ids NWS has stopped returning (e.g.
+    because a location's fetch failed this cycle, or the alert has genuinely
+    ended) — those are kept until their self-reported expiry passes, rather
+    than being guessed at."""
     now = datetime.now(timezone.utc)
     kept = {}
     for alert_id, entry in state.items():
+        if alert_id in seen_ids:
+            kept[alert_id] = entry
+            continue
         expires = entry.get("expires")
         if expires:
             try:
-                if datetime.fromisoformat(expires) < now:
-                    continue
+                if datetime.fromisoformat(expires) >= now:
+                    kept[alert_id] = entry
             except ValueError:
-                pass
-        kept[alert_id] = entry
+                kept[alert_id] = entry
     return kept
 
 
@@ -131,10 +149,16 @@ def _decide(location, alert):
 def _content_key(location, alert):
     """Fingerprint of an alert's actual content, independent of its (possibly
     reissued-with-a-new-id) NWS id — used to catch reissues of unchanged
-    alerts that id-based dedup alone would miss."""
+    alerts that id-based dedup alone would miss.
+
+    Deliberately excludes the headline. NWS headlines always embed the
+    issuance timestamp ("...issued July 9 at 8:01PM EDT until July 10 at
+    8:00PM EDT..."), which is unique to every reissue by construction — if it
+    were included here, the hash would differ on every single reissue and
+    this dedup would never fire. That was a real bug: Beach Hazards
+    Statement got re-notified every 15 minutes for hours because of it."""
     text = "|".join([
         location, alert.get("event") or "",
-        (alert.get("headline") or "").strip(),
         (alert.get("description") or "").strip(),
     ])
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -153,9 +177,10 @@ def check():
     """Runs one monitoring pass. Returns a list of human-readable result lines
     (also used as the log output when run via the scheduled task)."""
     config = _load_config()
-    state = _prune_expired(_load_state())
+    state = _load_state()
     known_content_keys = {entry["content_key"] for entry in state.values() if entry.get("content_key")}
     results = []
+    seen_ids = set()
 
     for location in config.get("locations", []):
         result = get_alerts_for(location)
@@ -167,6 +192,7 @@ def check():
             alert_id = alert.get("id")
             if not alert_id:
                 continue  # can't dedup without an id; skip rather than risk spamming
+            seen_ids.add(alert_id)
             if alert_id in state:
                 continue  # already evaluated this alert's lifetime
 
@@ -208,6 +234,7 @@ def check():
             }
             known_content_keys.add(content_key)
 
+    state = _prune_stale(state, seen_ids)
     _save_state(state)
     return results
 
