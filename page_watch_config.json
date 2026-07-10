@@ -5,6 +5,11 @@
       "url": "https://www.amazon.com/GIGABYTE-GeForce-WINDFORCE-Graphics-GV-N5080WF3OC-16GD/dp/B0DS2R7N4F?crid=IWDDNW3ZJWIC&dib=eyJ2IjoiMSJ9.3fzTS05W65IMSS6nTvTuTeFL5IyZFz1SgiLg506KRisGxXGXU2UAAkXW4aCi1brUiu1toEUQsC_F9Ux6-Sk5parJORGkQ7R3BQnRQDpIBLuILUvBAd61Gdz-RHL8kvOwlCic1mpRakSWcktKNrlOZQRo9jEsdoXq2boPNvGDkR1NvXNVa9jFzMppvK9CGCllJfC5aP9_IRSzPZ5M_sdguxhLFU6LoR8Zs2dgpD_5xV4.dLaJY3yJ4swGISmExQiM9aXVmdzNFjyOxsJPzlPX4YE&dib_tag=se&keywords=rtx%2B5080&qid=1783711036&sprefix=rtx%2B5080%2Caps%2C140&sr=8-6&ufe=app_do%3Aamzn1.fos.9e604ce0-2c97-4070-84a4-c46f658b984b&th=1",
       "price_threshold_pct": 15.0,
       "check_interval_minutes": 240
+    },
+    {
+      "name": "Dota 2 Patch Notes",
+      "url": "https://store.steampowered.com/feeds/news/app/570/",
+      "css_selector": null
     }
   ]
 }

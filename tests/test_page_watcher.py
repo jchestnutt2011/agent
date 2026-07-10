@@ -7,9 +7,10 @@ import page_watcher as watcher
 
 
 class _FakeResponse:
-    def __init__(self, text, status_code=200):
+    def __init__(self, text, status_code=200, content_type="text/html"):
         self.text = text
         self.status_code = status_code
+        self.headers = {"Content-Type": content_type}
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -23,6 +24,36 @@ def _page(name="Test Page", url="https://example.com/item", css_selector=None):
 def test_extract_text_strips_scripts_and_styles():
     html_content = "<html><body><script>evil()</script><style>.x{}</style><p>Hello  world</p></body></html>"
     assert watcher._extract_text(html_content) == "Hello world"
+
+
+def test_extract_text_parses_rss_feed_when_is_xml():
+    """RSS/Atom feeds (e.g. a game's Steam news feed, used for patch-note
+    watches) must parse via the XML parser, not the lenient HTML one, or
+    bs4 emits an XMLParsedAsHTMLWarning and can misparse the structure."""
+    rss = (
+        '<?xml version="1.0"?><rss version="2.0"><channel>'
+        "<title>Dota 2 Updates</title>"
+        "<item><title>Patch 7.42</title><description>Balance changes.</description></item>"
+        "</channel></rss>"
+    )
+    text = watcher._extract_text(rss, is_xml=True)
+    assert "Patch 7.42" in text
+    assert "Balance changes." in text
+
+
+def test_fetch_text_detects_xml_content_type_and_parses_as_xml(monkeypatch):
+    rss = (
+        '<?xml version="1.0"?><rss version="2.0"><channel>'
+        "<item><title>Patch Notes</title></item>"
+        "</channel></rss>"
+    )
+    monkeypatch.setattr(
+        watcher.requests, "get",
+        lambda url, headers, timeout: _FakeResponse(rss, content_type="application/rss+xml"),
+    )
+    text, error = watcher._fetch_text("https://example.com/feed")
+    assert error is None
+    assert "Patch Notes" in text
 
 
 def test_extract_text_with_selector():

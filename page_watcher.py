@@ -98,13 +98,21 @@ def _save_state(state):
     state_store.save_json_state(STATE_FILE, state)
 
 
-def _extract_text(html_content, css_selector=None):
+def _extract_text(content, css_selector=None, is_xml=False):
     """Visible text only, whitespace-collapsed so incidental reformatting
     (extra newlines, indentation changes) doesn't register as a content
     change. Returns None if a css_selector was given but matched nothing —
     distinct from "" (real, deliberately empty content) so callers can tell
-    a bad selector from a genuinely blank element."""
-    soup = BeautifulSoup(html_content, "lxml")
+    a bad selector from a genuinely blank element.
+
+    is_xml picks lxml's XML parser instead of its (lenient, tag-soup-
+    tolerant) HTML parser — needed for real RSS/Atom feeds like a game's
+    Steam news feed, which many real sites publish patch notes through and
+    which this project's own patch-note watches rely on. The HTML parser
+    still works on an XML feed (bs4 warns, doesn't fail), but the XML
+    parser handles the document structure correctly instead of by luck."""
+    parser = "xml" if is_xml else "lxml"
+    soup = BeautifulSoup(content, parser)
     for tag in soup(["script", "style"]):
         tag.decompose()
 
@@ -127,7 +135,8 @@ def _fetch_text(url, css_selector=None):
     except requests.RequestException as e:
         return None, f"fetch failed: {e}"
 
-    text = _extract_text(resp.text, css_selector)
+    is_xml = "xml" in resp.headers.get("Content-Type", "").lower()
+    text = _extract_text(resp.text, css_selector, is_xml=is_xml)
     if text is None:
         return None, f"css_selector '{css_selector}' matched nothing"
     if not text:
