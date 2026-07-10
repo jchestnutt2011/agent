@@ -9,6 +9,7 @@ from tools.weather import run as get_weather
 from tools.news import run as get_news
 from tools.reddit import fetch_posts as get_reddit_posts
 from tools.stocks import get_major_indices, get_watchlist
+from tools import telegram_notify
 
 BASE_DIR = Path(__file__).parent
 CONFIG_FILE = BASE_DIR / "briefing_config.json"
@@ -85,6 +86,26 @@ def synthesize_news(news_raw):
     return response["message"]["content"]
 
 
+def _build_telegram_summary(output):
+    """Compact push-notification version — full news/Reddit detail stays on
+    the Streamlit dashboard, this is just enough to glance at away from home.
+    Weather lines already carry any severe-alert text baked in by
+    tools/weather.py's run()."""
+    lines = [f"*Daily Briefing — {output['generated_at'][:10]}*", "", "*Weather:*"]
+    lines += [f"- {entry}" for entry in output["weather"]]
+
+    indices = output.get("markets", {}).get("indices", [])
+    movers = [idx for idx in indices if not idx.get("error")]
+    if movers:
+        lines += ["", "*Markets:*"]
+        lines += [
+            f"- {idx['label']}: {'+' if idx['change'] >= 0 else ''}{idx['pct_change']:.2f}%"
+            for idx in movers
+        ]
+
+    return "\n".join(lines)
+
+
 def main():
     config = load_config()
 
@@ -111,6 +132,10 @@ def main():
     tmp_file.write_text(json.dumps(output, indent=2, ensure_ascii=False), encoding="utf-8")
     tmp_file.replace(OUTPUT_FILE)
     print(f"Briefing written to {OUTPUT_FILE}")
+
+    sent = _safe("telegram notification", lambda: telegram_notify.send_message(_build_telegram_summary(output)))
+    if sent is True:
+        print("Telegram notification sent.")
 
 
 if __name__ == "__main__":
