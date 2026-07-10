@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -153,3 +154,182 @@ def test_no_pages_configured_returns_no_results(tmp_path, monkeypatch):
     (tmp_path / "page_watch_config.json").write_text(json.dumps({"pages": []}), encoding="utf-8")
 
     assert watcher.check() == []
+
+
+# --- Price mode ---
+
+AMAZON_TWISTER_HTML = """
+<html><body>
+<div class="a-price"><span class="a-offscreen">$99.99</span></div>
+<script>var priceAmount = {"priceAmount": 999.00, "productTitle": "unrelated sponsored item"};</script>
+<div class="a-section aok-hidden twister-plus-buying-options-price-data">
+{"desktop_buybox_group_1":[{"displayPrice":"$30.00","priceAmount":30.00,"currencySymbol":"$"}]}
+</div>
+</body></html>
+"""
+
+CORE_PRICE_HTML = """
+<html><body>
+<div id="corePriceDisplay_desktop_feature_div">
+  <span class="a-price"><span class="a-offscreen"></span></span>
+  <span class="a-price"><span class="a-offscreen">$45.50</span></span>
+</div>
+</body></html>
+"""
+
+GENERIC_HTML = "<html><body><p>Now only $12.34 for a limited time!</p></body></html>"
+
+
+def _price_page(name="Price Page", url="https://www.amazon.com/dp/TEST", threshold=10, css_selector=None, interval=None):
+    page = {"name": name, "url": url, "price_threshold_pct": threshold}
+    if css_selector:
+        page["css_selector"] = css_selector
+    if interval is not None:
+        page["check_interval_minutes"] = interval
+    return page
+
+
+def test_extract_price_prefers_twister_buybox_json_over_other_prices_on_page():
+    """Amazon pages embed priceAmount fields for sponsored/related products
+    too — a naive first-match grab would pick up the wrong item's price."""
+    assert watcher._extract_price(AMAZON_TWISTER_HTML) == 30.00
+
+
+def test_extract_price_falls_back_to_core_price_offscreen():
+    assert watcher._extract_price(CORE_PRICE_HTML) == 45.50
+
+
+def test_extract_price_generic_fallback_for_non_amazon_page():
+    assert watcher._extract_price(GENERIC_HTML) == 12.34
+
+
+def test_extract_price_with_css_selector():
+    html_content = '<div id="price">$19.99</div><div id="ad">Buy now for $999!</div>'
+    assert watcher._extract_price(html_content, "#price") == 19.99
+
+
+def test_extract_price_returns_none_when_nothing_found():
+    assert watcher._extract_price("<html><body><p>no price here</p></body></html>") is None
+
+
+def test_looks_blocked_detects_amazon_captcha_page():
+    blocked_html = "To discuss automated access to Amazon data please contact api-services-support@amazon.com."
+    assert watcher._looks_blocked(blocked_html) is True
+    assert watcher._looks_blocked(AMAZON_TWISTER_HTML) is False
+
+
+def test_check_price_page_captures_baseline_without_notifying(tmp_path, monkeypatch):
+    monkeypatch.setattr(watcher, "CONFIG_FILE", tmp_path / "page_watch_config.json")
+    monkeypatch.setattr(watcher, "STATE_FILE", tmp_path / "page_watch_state.json")
+    (tmp_path / "page_watch_config.json").write_text(json.dumps({"pages": [_price_page()]}), encoding="utf-8")
+    monkeypatch.setattr(watcher.requests, "get", lambda url, headers, timeout: _FakeResponse(AMAZON_TWISTER_HTML))
+
+    sent_messages = []
+    monkeypatch.setattr(watcher.telegram_notify, "send_message", lambda text: sent_messages.append(text) or True)
+
+    results = watcher.check()
+
+    assert sent_messages == []
+    assert "baseline captured ($30.00)" in results[0]
+    state = watcher._load_state()
+    assert state["Price Page"]["reference_price"] == 30.00
+
+
+def test_check_price_page_notifies_on_drop_past_threshold(tmp_path, monkeypatch):
+    monkeypatch.setattr(watcher, "CONFIG_FILE", tmp_path / "page_watch_config.json")
+    monkeypatch.setattr(watcher, "STATE_FILE", tmp_path / "page_watch_state.json")
+    (tmp_path / "page_watch_config.json").write_text(json.dumps({"pages": [_price_page(threshold=10)]}), encoding="utf-8")
+    # Fixture reports $30.00; set the stored reference high enough that the
+    # move crosses the 10% threshold.
+    watcher._save_state({"Price Page": {"reference_price": 40.00, "last_price": 40.00, "last_checked_at": "2020-01-01T00:00:00+00:00"}})
+    monkeypatch.setattr(watcher.requests, "get", lambda url, headers, timeout: _FakeResponse(AMAZON_TWISTER_HTML))
+
+    sent_messages = []
+    monkeypatch.setattr(watcher.telegram_notify, "send_message", lambda text: sent_messages.append(text) or True)
+
+    results = watcher.check()
+
+    # 40 -> 30 is a -25% move, past the 10% threshold
+    assert len(sent_messages) == 1
+    assert "$40.00" in sent_messages[0] and "$30.00" in sent_messages[0]
+    assert "-25.0%" in sent_messages[0]
+    state = watcher._load_state()
+    assert state["Price Page"]["reference_price"] == 30.00  # reset to new price
+
+
+def test_check_price_page_skips_notify_below_threshold(tmp_path, monkeypatch):
+    monkeypatch.setattr(watcher, "CONFIG_FILE", tmp_path / "page_watch_config.json")
+    monkeypatch.setattr(watcher, "STATE_FILE", tmp_path / "page_watch_state.json")
+    (tmp_path / "page_watch_config.json").write_text(json.dumps({"pages": [_price_page(threshold=10)]}), encoding="utf-8")
+    watcher._save_state({"Price Page": {"reference_price": 29.00, "last_price": 29.00, "last_checked_at": "2020-01-01T00:00:00+00:00"}})
+    monkeypatch.setattr(watcher.requests, "get", lambda url, headers, timeout: _FakeResponse(AMAZON_TWISTER_HTML))  # $30, ~3.4% move
+
+    sent_messages = []
+    monkeypatch.setattr(watcher.telegram_notify, "send_message", lambda text: sent_messages.append(text) or True)
+
+    results = watcher.check()
+
+    assert sent_messages == []
+    assert "below 10% threshold" in results[0]
+    # reference price is unchanged, only last_price advances
+    state = watcher._load_state()
+    assert state["Price Page"]["reference_price"] == 29.00
+    assert state["Price Page"]["last_price"] == 30.00
+
+
+def test_check_price_page_throttles_by_interval(tmp_path, monkeypatch):
+    monkeypatch.setattr(watcher, "CONFIG_FILE", tmp_path / "page_watch_config.json")
+    monkeypatch.setattr(watcher, "STATE_FILE", tmp_path / "page_watch_state.json")
+    (tmp_path / "page_watch_config.json").write_text(
+        json.dumps({"pages": [_price_page(threshold=10, interval=240)]}), encoding="utf-8"
+    )
+    recent = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    watcher._save_state({"Price Page": {"reference_price": 30.00, "last_price": 30.00, "last_checked_at": recent}})
+
+    fetch_calls = []
+    monkeypatch.setattr(watcher.requests, "get", lambda url, headers, timeout: fetch_calls.append(1) or _FakeResponse(AMAZON_TWISTER_HTML))
+
+    results = watcher.check()
+
+    assert fetch_calls == []  # never fetched — still within the 240-min interval
+    assert "skipped" in results[0]
+
+
+def test_check_price_page_detects_captcha_block(tmp_path, monkeypatch):
+    monkeypatch.setattr(watcher, "CONFIG_FILE", tmp_path / "page_watch_config.json")
+    monkeypatch.setattr(watcher, "STATE_FILE", tmp_path / "page_watch_state.json")
+    (tmp_path / "page_watch_config.json").write_text(json.dumps({"pages": [_price_page()]}), encoding="utf-8")
+    blocked_html = "To discuss automated access to Amazon data please contact api-services-support@amazon.com."
+    monkeypatch.setattr(watcher.requests, "get", lambda url, headers, timeout: _FakeResponse(blocked_html))
+
+    results = watcher.check()
+
+    assert "anti-bot/CAPTCHA" in results[0]
+    assert watcher._load_state() == {}
+
+
+def test_check_price_page_handles_no_price_found(tmp_path, monkeypatch):
+    monkeypatch.setattr(watcher, "CONFIG_FILE", tmp_path / "page_watch_config.json")
+    monkeypatch.setattr(watcher, "STATE_FILE", tmp_path / "page_watch_state.json")
+    (tmp_path / "page_watch_config.json").write_text(json.dumps({"pages": [_price_page()]}), encoding="utf-8")
+    monkeypatch.setattr(watcher.requests, "get", lambda url, headers, timeout: _FakeResponse("<html><body>no price</body></html>"))
+
+    results = watcher.check()
+
+    assert "no price found" in results[0]
+    assert watcher._load_state() == {}
+
+
+def test_check_price_page_does_not_persist_when_telegram_send_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(watcher, "CONFIG_FILE", tmp_path / "page_watch_config.json")
+    monkeypatch.setattr(watcher, "STATE_FILE", tmp_path / "page_watch_state.json")
+    (tmp_path / "page_watch_config.json").write_text(json.dumps({"pages": [_price_page(threshold=10)]}), encoding="utf-8")
+    watcher._save_state({"Price Page": {"reference_price": 40.00, "last_price": 40.00, "last_checked_at": "2020-01-01T00:00:00+00:00"}})
+    monkeypatch.setattr(watcher.requests, "get", lambda url, headers, timeout: _FakeResponse(AMAZON_TWISTER_HTML))
+    monkeypatch.setattr(watcher.telegram_notify, "send_message", lambda text: False)
+
+    results = watcher.check()
+
+    assert "will retry" in results[0]
+    state = watcher._load_state()
+    assert state["Price Page"]["reference_price"] == 40.00  # unchanged, retry next cycle
