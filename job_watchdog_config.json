@@ -1,0 +1,14 @@
+{
+  "jobs": [
+    {
+      "name": "Weather Alert Monitor",
+      "log_file": "weather_alert_monitor.log",
+      "max_staleness_minutes": 45
+    },
+    {
+      "name": "Daily Briefing",
+      "log_file": "briefing_run.log",
+      "max_staleness_minutes": 1560
+    }
+  ]
+}
