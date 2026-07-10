@@ -13,6 +13,15 @@ Same edge-triggered notify shape as job_watchdog.py: only ping on a status
 transition (ok -> unhealthy or unhealthy -> ok), not on every cycle, so a
 persistent problem doesn't spam every 15 minutes — but recovery is reported
 too, so "did it fix itself" isn't left ambiguous.
+
+Known limitation: _check_http only confirms Ollama/Streamlit answered an
+HTTP request, not that they're actually working correctly (e.g. Ollama
+responding 200 while the model itself is wedged or OOMing wouldn't be
+caught). A real inference call would catch more but costs real GPU time
+and latency every 15 minutes for a check that's mostly meant to catch
+"the process died" or "the PC is off" — a much cheaper and more common
+failure than "the service is up but broken." Acceptable for v1; revisit
+if a wedged-but-responsive failure actually happens in practice.
 """
 
 import json
