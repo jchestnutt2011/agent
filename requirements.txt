@@ -7,3 +7,5 @@ pandas==3.0.3
 faster-whisper==1.2.1
 nvidia-cublas-cu12==12.9.2.10
 nvidia-cudnn-cu12==9.24.0.43
+beautifulsoup4==4.15.0
+lxml==6.1.1

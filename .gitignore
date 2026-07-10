@@ -5,6 +5,7 @@ agent_memory.json
 briefing.json
 alert_monitor_state.json
 job_watchdog_state.json
+page_watch_state.json
 weather_log.txt
 *.log
 .claude/*
