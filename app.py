@@ -1,8 +1,11 @@
+import hashlib
+
 import streamlit as st
 import ollama
 
 from config import MODEL
 from tool_registry import load_tools
+from tools.voice_input import transcribe
 
 st.set_page_config(page_title="Home Agent", page_icon="🤖")
 st.title("Home Agent")
@@ -33,6 +36,10 @@ if "messages" not in st.session_state:
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "system", "content": f"Saved notes from previous conversations:\n{saved_memory}"},
     ]
+if "audio_widget_key" not in st.session_state:
+    st.session_state.audio_widget_key = 0
+if "last_audio_hash" not in st.session_state:
+    st.session_state.last_audio_hash = None
 
 # Display chat history
 for msg in st.session_state.messages:
@@ -72,8 +79,10 @@ def run_turn(messages):
     return "I wasn't able to finish that after several tool calls — could you rephrase or simplify the request?"
 
 
-# Chat input
-if prompt := st.chat_input("Ask anything..."):
+def handle_user_message(prompt):
+    """Shared by typed and transcribed voice input, so both go through the
+    exact same tool-calling pipeline — voice is just a different way of
+    producing the same text prompt, not a separate code path."""
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.write(prompt)
@@ -82,3 +91,27 @@ if prompt := st.chat_input("Ask anything..."):
         with st.spinner("Thinking..."):
             reply = run_turn(st.session_state.messages)
             st.write(reply)
+
+
+# Voice input. st.audio_input keeps returning the same recording on every
+# rerun until the widget is cleared (unlike st.chat_input, which
+# self-resets after being read once) — dedup by content hash so a recording
+# isn't transcribed and re-sent on every subsequent rerun.
+audio = st.audio_input("🎤 Or record a voice message", key=f"audio_input_{st.session_state.audio_widget_key}")
+if audio is not None:
+    audio_bytes = audio.getvalue()
+    audio_hash = hashlib.md5(audio_bytes).hexdigest()
+    if audio_hash != st.session_state.last_audio_hash:
+        st.session_state.last_audio_hash = audio_hash
+        with st.spinner("Transcribing..."):
+            transcribed = transcribe(audio_bytes)
+        if transcribed:
+            st.session_state.audio_widget_key += 1  # forces a fresh, empty widget next run
+            handle_user_message(transcribed)
+            st.rerun()
+        else:
+            st.warning("Couldn't make out any speech in that recording — try again.")
+
+# Typed input
+if prompt := st.chat_input("Ask anything..."):
+    handle_user_message(prompt)
