@@ -21,6 +21,10 @@ COMPASS_DIRECTIONS = [
     "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
 ]
 
+# NWS requires a descriptive User-Agent identifying the application/contact,
+# and only covers US locations (silently returns no alerts elsewhere).
+NWS_HEADERS = {"User-Agent": "(ai-agent home briefing, jchestnutt2011@gmail.com)"}
+
 SCHEMA = {
     "type": "function",
     "function": {
@@ -76,6 +80,35 @@ def _resolve_location(location):
         if match:
             return match
     return None
+
+
+def _get_alerts(lat, lon):
+    """Active NWS severe weather alerts for a point. US-only; returns an empty
+    list on any failure (network issue, non-US location) rather than raising,
+    since alerts are a bonus on top of the core forecast, not required for it."""
+    try:
+        resp = requests.get(
+            "https://api.weather.gov/alerts/active",
+            params={"point": f"{lat},{lon}"},
+            headers=NWS_HEADERS,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        features = resp.json().get("features", [])
+    except (requests.RequestException, ValueError):
+        return []
+
+    alerts = []
+    for feature in features:
+        props = feature.get("properties", {})
+        alerts.append({
+            "event": props.get("event", "Alert"),
+            "headline": props.get("headline"),
+            "severity": props.get("severity"),
+            "description": props.get("description"),
+            "expires": props.get("expires"),
+        })
+    return alerts
 
 
 def get_conditions(location):
@@ -148,6 +181,7 @@ def get_conditions(location):
         "wind_direction": _compass(current.get("wind_direction_10m")),
         "precipitation": current.get("precipitation"),
         "forecast": forecast,
+        "alerts": _get_alerts(lat, lon),
     }
 
 
@@ -164,7 +198,13 @@ def run(location):
         direction = f" {data['wind_direction']}" if data["wind_direction"] else ""
         wind = f", wind {data['wind_speed']} mph{direction}"
 
+    alerts = data.get("alerts") or []
+    alert_text = ""
+    if alerts:
+        headlines = "; ".join(a["headline"] or a["event"] for a in alerts)
+        alert_text = f"\n⚠️ Active alerts: {headlines}"
+
     return (
         f"Weather in {data['label']}: {data['temperature']}°F{feels_like}, "
-        f"{data['condition']}{wind}"
+        f"{data['condition']}{wind}{alert_text}"
     )

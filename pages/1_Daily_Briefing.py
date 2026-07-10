@@ -123,6 +123,11 @@ def render_weather_tab():
             st.warning(info["error"])
             continue
 
+        for alert in info.get("alerts") or []:
+            severity = (alert.get("severity") or "").lower()
+            banner = st.error if severity in ("severe", "extreme") else st.warning
+            banner(f"**{alert['event']}**: {alert.get('headline') or ''}")
+
         cols = st.columns(4)
         cols[0].metric("Temperature", f"{info['temperature']:.0f}°F")
         if info.get("feels_like") is not None:
