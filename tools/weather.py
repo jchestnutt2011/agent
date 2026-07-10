@@ -102,9 +102,12 @@ def _get_alerts(lat, lon):
     for feature in features:
         props = feature.get("properties", {})
         alerts.append({
+            "id": props.get("id"),
             "event": props.get("event", "Alert"),
             "headline": props.get("headline"),
             "severity": props.get("severity"),
+            "urgency": props.get("urgency"),
+            "certainty": props.get("certainty"),
             "description": props.get("description"),
             "expires": props.get("expires"),
         })

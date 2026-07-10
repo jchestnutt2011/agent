@@ -69,9 +69,12 @@ def test_get_alerts_parses_active_features(monkeypatch):
         "features": [
             {
                 "properties": {
+                    "id": "urn:oid:2.49.0.1.840.0.test.001.1",
                     "event": "Severe Thunderstorm Warning",
                     "headline": "Severe Thunderstorm Warning issued for Durham County",
                     "severity": "Severe",
+                    "urgency": "Immediate",
+                    "certainty": "Observed",
                     "description": "Damaging winds expected.",
                     "expires": "2026-07-09T20:00:00-04:00",
                 }
@@ -83,8 +86,11 @@ def test_get_alerts_parses_active_features(monkeypatch):
     alerts = weather._get_alerts(35.99, -78.9)
 
     assert len(alerts) == 1
+    assert alerts[0]["id"] == "urn:oid:2.49.0.1.840.0.test.001.1"
     assert alerts[0]["event"] == "Severe Thunderstorm Warning"
     assert alerts[0]["severity"] == "Severe"
+    assert alerts[0]["urgency"] == "Immediate"
+    assert alerts[0]["certainty"] == "Observed"
 
 
 def test_get_alerts_empty_when_no_active_alerts(monkeypatch):
