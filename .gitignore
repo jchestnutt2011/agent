@@ -7,3 +7,5 @@ weather_log.txt
 *.log
 .claude/
 reddit_auth.json
+finnhub_auth.json
+telegram_auth.json
