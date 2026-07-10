@@ -50,21 +50,32 @@ SCHEMA = {
 
 
 def fetch_posts(subreddit, limit=5):
-    """Returns a list of {'title', 'url'} dicts, or a string error message."""
+    """Returns a list of {'title', 'url'} dicts, or a string error message.
+    Never raises — a network error or malformed feed comes back as an error
+    string, so the chat tool and the daily briefing degrade gracefully."""
     url = f"https://www.reddit.com/r/{subreddit}/top/.rss"
     params = {"t": "day", "limit": limit, **_load_auth()}
 
     resp = None
     for attempt in range(3):
-        resp = requests.get(url, params=params, headers=HEADERS, timeout=10)
+        try:
+            resp = requests.get(url, params=params, headers=HEADERS, timeout=10)
+        except requests.RequestException as e:
+            return f"Could not fetch r/{subreddit}: {e}"
         if resp.status_code != 429:
             break
-        time.sleep(15 * (attempt + 1))
+        # Don't sleep after the final attempt — we're about to give up anyway.
+        if attempt < 2:
+            time.sleep(15 * (attempt + 1))
 
     if resp.status_code != 200:
         return f"Could not fetch r/{subreddit}: HTTP {resp.status_code}"
 
-    root = ET.fromstring(resp.content)
+    try:
+        root = ET.fromstring(resp.content)
+    except ET.ParseError as e:
+        return f"Could not parse r/{subreddit} feed: {e}"
+
     entries = root.findall(f"{ATOM_NS}entry")[:limit]
     if not entries:
         return f"No posts found for r/{subreddit}."

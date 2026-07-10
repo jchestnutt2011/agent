@@ -24,9 +24,21 @@ RELATIVE_UNITS = {
 }
 
 
+def _as_utc(dt):
+    """Force a datetime to timezone-aware UTC. Both source paths below can
+    yield NAIVE datetimes — ddgs sometimes returns a bare ISO string with no
+    offset, and RFC 822 pubDates with a '-0000' zone (which Google News does
+    emit) parse to naive — and fetch_headlines compares these against a
+    tz-aware cutoff. Mixing naive and aware raises TypeError, which silently
+    took down the whole news fetch. Treat a missing offset as UTC."""
+    if dt is not None and dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def _parse_date(date_str):
     try:
-        return datetime.fromisoformat(date_str)
+        return _as_utc(datetime.fromisoformat(date_str))
     except ValueError:
         pass
 
@@ -46,7 +58,7 @@ def _parse_date(date_str):
 def _parse_pubdate(date_str):
     """Google News RSS uses standard RFC 822 pubDate strings."""
     try:
-        return parsedate_to_datetime(date_str)
+        return _as_utc(parsedate_to_datetime(date_str))
     except (TypeError, ValueError):
         return None
 

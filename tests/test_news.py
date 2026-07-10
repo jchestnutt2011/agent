@@ -1,12 +1,42 @@
 from datetime import datetime, timedelta, timezone
 
 import tools.news as news
-from tools.news import _parse_date
+from tools.news import _parse_date, _as_utc
 
 
 def test_parse_date_full_iso():
     result = _parse_date("2026-07-01T12:00:00+00:00")
     assert result == datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def test_parse_date_naive_iso_is_forced_to_utc():
+    """ddgs sometimes returns a bare ISO string with no offset. It must come
+    back tz-aware, or the comparison in fetch_headlines raises TypeError."""
+    result = _parse_date("2026-07-09T12:00:00")
+    assert result.tzinfo is not None
+    assert result == datetime(2026, 7, 9, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def test_parse_pubdate_naive_minus_zero_zone_is_forced_to_utc():
+    """RFC 822 '-0000' parses to a naive datetime; must be forced aware."""
+    result = news._parse_pubdate("Wed, 08 Jul 2026 03:32:07 -0000")
+    assert result.tzinfo is not None
+    assert result == datetime(2026, 7, 8, 3, 32, 7, tzinfo=timezone.utc)
+
+
+def test_fetch_headlines_does_not_crash_on_naive_dates(monkeypatch):
+    """End-to-end regression: a source returning naive-dated items must not
+    raise when filtered against the tz-aware freshness cutoff."""
+    # A naive timestamp an hour ago, exactly the shape ddgs can emit.
+    naive_recent = (datetime.now(timezone.utc) - timedelta(hours=1)).replace(tzinfo=None)
+    monkeypatch.setattr(news, "_fetch_google_news", lambda q, n: [])
+    monkeypatch.setattr(news, "_fetch_ddgs", lambda q, n: [{
+        "title": "Naive dated story", "url": "https://example.com/x", "source": "Ex",
+        "published": _as_utc(naive_recent), "body": "", "image": None,
+    }])
+    # Must not raise, and the recent naive-dated item should survive the filter.
+    result = news.fetch_headlines("anything", max_results=5)
+    assert len(result) == 1
 
 
 def test_parse_date_relative_hours():
