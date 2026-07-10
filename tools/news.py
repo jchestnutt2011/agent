@@ -7,11 +7,11 @@ from email.utils import parsedate_to_datetime
 import requests
 from ddgs import DDGS
 
+from tools.http_headers import BROWSER_HEADERS
+
 MAX_AGE_DAYS = 14
 
 GOOGLE_NEWS_RSS = "https://news.google.com/rss/search"
-
-HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ai-agent home briefing"}
 
 # ddgs.news() reports dates inconsistently depending on source: sometimes a full
 # ISO timestamp, sometimes a relative string like "7h", "16h", "2d", "3mo".
@@ -115,7 +115,7 @@ def _fetch_google_news(query, max_results):
         resp = requests.get(
             GOOGLE_NEWS_RSS,
             params={"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"},
-            headers=HEADERS,
+            headers=BROWSER_HEADERS,
             timeout=10,
         )
         resp.raise_for_status()

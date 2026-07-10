@@ -49,26 +49,11 @@ from bs4 import BeautifulSoup
 import state_store
 from config import MODEL
 from tools import telegram_notify
+from tools.http_headers import BROWSER_HEADERS
 
 BASE_DIR = Path(__file__).parent
 CONFIG_FILE = BASE_DIR / "page_watch_config.json"
 STATE_FILE = BASE_DIR / "page_watch_state.json"
-
-# A full, realistic browser header set — not just a UA string. Verified
-# against a real Amazon product page: a bare UA-only request got served a
-# CAPTCHA wall (opfcaptcha.amazon.com) instead of the product page; this
-# full set got the real 2MB+ page through. Harmless for simpler sites.
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-}
 
 # How much of the before/after text to hand the local model. Enough for it
 # to judge context around a change without blowing up the prompt on a large
@@ -137,7 +122,7 @@ def _fetch_text(url, css_selector=None):
     one unreachable page doesn't stop the rest of the watchlist from being
     checked."""
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=10)
+        resp = requests.get(url, headers=BROWSER_HEADERS, timeout=10)
         resp.raise_for_status()
     except requests.RequestException as e:
         return None, f"fetch failed: {e}"
@@ -283,7 +268,7 @@ def _check_price_page(name, url, css_selector, threshold_pct, interval_minutes, 
             return f"{name}: skipped (checked {minutes_since:.0f} min ago, interval is {interval_minutes} min)"
 
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=10)
+        resp = requests.get(url, headers=BROWSER_HEADERS, timeout=10)
         resp.raise_for_status()
     except requests.RequestException as e:
         return f"{name}: could not check (fetch failed: {e})"

@@ -5,6 +5,8 @@ from pathlib import Path
 
 import requests
 
+from tools.http_headers import BROWSER_HEADERS
+
 ATOM_NS = "{http://www.w3.org/2005/Atom}"
 
 # Reddit throttles unauthenticated RSS to ~1 req/min as of mid-2026. Appending
@@ -12,13 +14,6 @@ ATOM_NS = "{http://www.w3.org/2005/Atom}"
 # gitignored — never commit this file) bypasses that limit even for public
 # subreddit feeds.
 AUTH_FILE = Path(__file__).parent.parent / "reddit_auth.json"
-
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-    )
-}
 
 
 def _load_auth():
@@ -59,7 +54,7 @@ def fetch_posts(subreddit, limit=5):
     resp = None
     for attempt in range(3):
         try:
-            resp = requests.get(url, params=params, headers=HEADERS, timeout=10)
+            resp = requests.get(url, params=params, headers=BROWSER_HEADERS, timeout=10)
         except requests.RequestException as e:
             return f"Could not fetch r/{subreddit}: {e}"
         if resp.status_code != 429:
