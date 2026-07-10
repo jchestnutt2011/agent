@@ -64,7 +64,7 @@ def _save_state(state):
     state_store.save_json_state(STATE_FILE, state)
 
 
-def _prune_stale(state, seen_ids):
+def _prune_stale(state, seen_ids, checked_locations):
     """Drop state entries for alerts NWS is no longer actively serving, so the
     state file doesn't grow forever.
 
@@ -76,14 +76,27 @@ def _prune_stale(state, seen_ids):
     it from state every cycle, so it looked brand new on the next 15-minute
     run and got re-decided and re-notified over and over.
 
-    `expires` is now only a fallback for ids NWS has stopped returning (e.g.
-    because a location's fetch failed this cycle, or the alert has genuinely
-    ended) — those are kept until their self-reported expiry passes, rather
-    than being guessed at."""
+    `expires` is only a fallback for ids NWS has stopped returning — but only
+    for a location that was actually successfully checked this cycle. If a
+    location's fetch failed (network blip, NWS outage), none of its alerts
+    make it into seen_ids either, which looks identical to "NWS stopped
+    serving these" — a second way to trip the same bug: a transient fetch
+    error could evict a genuinely still-active alert just as easily as an
+    expires lag could. checked_locations distinguishes the two: an entry
+    whose location wasn't successfully checked this cycle is kept
+    regardless of expires, since there's no fresh evidence either way.
+
+    Residual simplification: a location later removed from config entirely
+    is never "successfully checked" again, so its entries are kept forever
+    rather than eventually pruned. Acceptable for v1 — same spirit as this
+    file's other documented simplifications."""
     now = datetime.now(timezone.utc)
     kept = {}
     for alert_id, entry in state.items():
         if alert_id in seen_ids:
+            kept[alert_id] = entry
+            continue
+        if entry.get("location") not in checked_locations:
             kept[alert_id] = entry
             continue
         expires = entry.get("expires")
@@ -175,6 +188,7 @@ def check():
     known_content_keys = {entry["content_key"] for entry in state.values() if entry.get("content_key")}
     results = []
     seen_ids = set()
+    checked_locations = set()
 
     for location in config.get("locations", []):
         result = get_alerts_for(location)
@@ -182,6 +196,7 @@ def check():
             results.append(f"{location}: could not check ({result['error']})")
             continue
 
+        checked_locations.add(result["label"])
         for alert in result["alerts"]:
             alert_id = alert.get("id")
             if not alert_id:
@@ -228,7 +243,7 @@ def check():
             }
             known_content_keys.add(content_key)
 
-    state = _prune_stale(state, seen_ids)
+    state = _prune_stale(state, seen_ids, checked_locations)
     _save_state(state)
     return results
 

@@ -16,12 +16,12 @@ def test_prune_stale_drops_unseen_expired_alerts():
     past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
     future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
     state = {
-        "expired-one": {"expires": past},
-        "still-active": {"expires": future},
-        "no-expiry-unseen": {},
-        "no-expiry-seen": {},
+        "expired-one": {"expires": past, "location": "Topsail Island"},
+        "still-active": {"expires": future, "location": "Topsail Island"},
+        "no-expiry-unseen": {"location": "Topsail Island"},
+        "no-expiry-seen": {"location": "Topsail Island"},
     }
-    result = monitor._prune_stale(state, seen_ids={"no-expiry-seen"})
+    result = monitor._prune_stale(state, seen_ids={"no-expiry-seen"}, checked_locations={"Topsail Island"})
     assert "expired-one" not in result
     assert "still-active" in result
     assert "no-expiry-unseen" not in result  # can't confirm still active without expires or seeing it again
@@ -36,9 +36,35 @@ def test_prune_stale_keeps_seen_alert_even_past_its_reported_expiry():
     This is the exact bug that caused a real Beach Hazards Statement to
     re-send every 15 minutes."""
     past = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
-    state = {"still-being-served": {"expires": past}}
-    result = monitor._prune_stale(state, seen_ids={"still-being-served"})
+    state = {"still-being-served": {"expires": past, "location": "Topsail Island"}}
+    result = monitor._prune_stale(state, seen_ids={"still-being-served"}, checked_locations={"Topsail Island"})
     assert "still-being-served" in result
+
+
+def test_prune_stale_keeps_expired_alert_when_its_location_fetch_failed():
+    """A second way to trip the same underlying bug: if a location's fetch
+    fails this cycle (network blip, NWS outage), none of its alerts end up
+    in seen_ids either — indistinguishable from "NWS stopped serving them"
+    unless checked_locations is consulted. An entry whose location wasn't
+    successfully checked this cycle must survive regardless of its
+    (possibly lagging) expires, or a transient failure would silently
+    delete a genuinely still-active alert and cause a re-notify next cycle."""
+    past = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
+    state = {"still-active-elsewhere": {"expires": past, "location": "Durham, NC"}}
+    # Durham's fetch failed this cycle, so it's NOT in checked_locations,
+    # even though the alert id isn't in seen_ids either.
+    result = monitor._prune_stale(state, seen_ids=set(), checked_locations={"Topsail Island"})
+    assert "still-active-elsewhere" in result
+
+
+def test_prune_stale_drops_expired_alert_once_its_location_is_confirmed_gone():
+    """Once a location IS successfully checked and its alert isn't in the
+    results, an already-expired entry is safe to drop — this is the normal
+    cleanup path, distinct from the transient-failure case above."""
+    past = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
+    state = {"gone-now": {"expires": past, "location": "Topsail Island"}}
+    result = monitor._prune_stale(state, seen_ids=set(), checked_locations={"Topsail Island"})
+    assert "gone-now" not in result
 
 
 def test_decide_severe_uses_hard_floor_without_calling_model(monkeypatch):
@@ -265,3 +291,35 @@ def test_check_handles_location_lookup_error(tmp_path, monkeypatch):
 
     results = monitor.check()
     assert "could not check" in results[0]
+
+
+def test_check_does_not_prune_expired_alert_when_its_location_fetch_fails(tmp_path, monkeypatch):
+    """End-to-end regression: one location's fetch fails this cycle while a
+    different location succeeds. The failed location's still-active (but
+    already past its self-reported expiry) alert must survive the run, not
+    get silently pruned and re-notified next cycle."""
+    monkeypatch.setattr(monitor, "CONFIG_FILE", tmp_path / "briefing_config.json")
+    monkeypatch.setattr(monitor, "STATE_FILE", tmp_path / "alert_monitor_state.json")
+    (tmp_path / "briefing_config.json").write_text(
+        '{"locations": ["Durham, NC", "Topsail Island, NC"]}', encoding="utf-8"
+    )
+
+    past_expiry = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
+    monitor._save_state({
+        "durham-alert-id": {
+            "location": "Durham", "event": "Heat Advisory", "severity": "Moderate",
+            "expires": past_expiry, "decided_by": "local model", "reason": "x", "notified": False,
+        }
+    })
+
+    def fake_get_alerts_for(location):
+        if location == "Durham, NC":
+            return {"error": "NWS request timed out"}
+        return {"label": "Topsail Island", "alerts": []}
+
+    monkeypatch.setattr(monitor, "get_alerts_for", fake_get_alerts_for)
+
+    monitor.check()
+
+    state = monitor._load_state()
+    assert "durham-alert-id" in state  # not pruned despite the expired timestamp
