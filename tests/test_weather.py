@@ -100,6 +100,23 @@ def test_get_alerts_returns_empty_list_on_failure_not_exception(monkeypatch):
     assert weather._get_alerts(35.99, -78.9) == []
 
 
+def test_get_alerts_for_returns_label_and_alerts(monkeypatch):
+    monkeypatch.setattr(weather, "_resolve_location", lambda location: {
+        "latitude": 35.99, "longitude": -78.9, "name": "Durham",
+    })
+    monkeypatch.setattr(weather, "_get_alerts", lambda lat, lon: [{"event": "Heat Advisory"}])
+
+    result = weather.get_alerts_for("Durham, NC")
+
+    assert result == {"label": "Durham", "alerts": [{"event": "Heat Advisory"}]}
+
+
+def test_get_alerts_for_unknown_location_returns_error(monkeypatch):
+    monkeypatch.setattr(weather, "_resolve_location", lambda location: None)
+    result = weather.get_alerts_for("Nowhereville, XX")
+    assert "error" in result
+
+
 def test_run_appends_alert_summary(monkeypatch):
     monkeypatch.setattr(weather, "get_conditions", lambda location: {
         "label": "Durham", "temperature": 90.0, "feels_like": 95.0, "humidity": 60,

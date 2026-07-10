@@ -111,6 +111,20 @@ def _get_alerts(lat, lon):
     return alerts
 
 
+def get_alerts_for(location):
+    """Active NWS alerts for a location, without fetching the full forecast —
+    used by tools/weather_alerts.py, which only needs alerts and would
+    otherwise pay for a full Open-Meteo forecast call it never uses. Returns
+    {'label': ..., 'alerts': [...]} or {'error': ...} on a bad location."""
+    match = _resolve_location(location)
+    if not match:
+        return {"error": f"Could not find location '{location}' in the geocoding database."}
+    return {
+        "label": match.get("name", location),
+        "alerts": _get_alerts(match["latitude"], match["longitude"]),
+    }
+
+
 def get_conditions(location):
     """Structured current conditions + 4-day forecast. Returns a dict with an
     'error' key on any failure (bad location, network issue, malformed
