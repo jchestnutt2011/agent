@@ -1,3 +1,4 @@
+import html
 import json
 from datetime import datetime
 from pathlib import Path
@@ -5,7 +6,7 @@ from pathlib import Path
 import ollama
 
 from config import MODEL
-from tools.weather import run as get_weather
+from tools.weather import get_conditions
 from tools.news import fetch_headlines as get_headlines
 from tools.reddit import fetch_posts as get_reddit_posts
 from tools.stocks import get_major_indices, get_watchlist
@@ -32,11 +33,16 @@ def _safe(label, fn, *args):
 
 
 def gather_weather(config):
-    """Deterministic, not LLM-touched — simple enough that there's nothing to
-    summarize, and it avoids any risk of the model garbling numbers."""
-    return [
-        f"{loc}: {_safe(f'weather for {loc}', get_weather, loc)}" for loc in config["locations"]
-    ]
+    """Structured per-location conditions + forecast (used to build the
+    Telegram day-range summary). Deterministic, not LLM-touched — same
+    reasoning as markets: no risk of the model garbling numbers. The
+    Streamlit Weather tab fetches its own live copy independently, so this
+    snapshot doesn't need to match that shape exactly."""
+    result = {}
+    for loc in config["locations"]:
+        info = _safe(f"weather for {loc}", get_conditions, loc)
+        result[loc] = info if isinstance(info, dict) else {"error": info}
+    return result
 
 
 def gather_markets(config):
@@ -117,24 +123,91 @@ def synthesize_news(news_sections):
     return response["message"]["content"]
 
 
+def _format_forecast_day(day):
+    date_label = datetime.fromisoformat(day["date"]).strftime("%a")
+    rain = f" {day['precip_chance']}%\U0001F327" if day.get("precip_chance") else ""
+    return f"{date_label} {day['high']:.0f}°/{day['low']:.0f}°{rain}"
+
+
+def _format_weather_entry(loc, info):
+    loc_safe = html.escape(loc)
+    if info.get("error"):
+        return f"<b>{loc_safe}</b>: {html.escape(str(info['error']))}"
+
+    parts = [f"<b>{loc_safe}</b> — {info['temperature']:.0f}°F, {html.escape(info['condition'])}"]
+    parts += [f"⚠️ {html.escape(alert['event'])}" for alert in (info.get("alerts") or [])]
+
+    forecast = info.get("forecast", [])
+    if forecast:
+        parts.append(" · ".join(_format_forecast_day(day) for day in forecast))
+
+    return "\n".join(parts)
+
+
+def _format_news_link(item):
+    title = html.escape(item["title"])
+    url = html.escape(item["url"], quote=True)
+    return f'- <a href="{url}">{title}</a>'
+
+
+# Telegram hard-rejects any message over 4096 chars (the whole send fails,
+# taking weather down with it). Google News redirect URLs alone can run
+# 300+ chars, so a busy news day gets uncomfortably close to that — leave
+# real headroom rather than cutting it close.
+TELEGRAM_MAX_LENGTH = 4000
+
+
+def _truncate_lines(lines, max_length):
+    """Drop trailing lines once the joined text would exceed max_length.
+    Line-level, not character-level: every line built by this module is a
+    complete, self-closed HTML fragment (a full <a>...</a> or <b>...</b>),
+    so cutting between lines can never leave a dangling tag — cutting
+    mid-line could."""
+    kept, total = [], 0
+    for line in lines:
+        total += len(line) + 1  # +1 for the newline that'll join it
+        if total > max_length:
+            kept.append("\n… (truncated — see the dashboard for full details)")
+            return kept
+        kept.append(line)
+    return kept
+
+
 def _build_telegram_summary(output):
-    """Compact push-notification version — full news/Reddit detail stays on
-    the Streamlit dashboard, this is just enough to glance at away from home.
-    Weather lines already carry any severe-alert text baked in by
-    tools/weather.py's run()."""
-    lines = [f"*Daily Briefing — {output['generated_at'][:10]}*", "", "*Weather:*"]
-    lines += [f"- {entry}" for entry in output["weather"]]
+    """Compact push-notification version — full detail (raw headline bodies,
+    thumbnails, Reddit) stays on the Streamlit dashboard; this is just enough
+    to glance at away from home. HTML parse mode, not Markdown: headline
+    titles are external, uncontrolled text, and Markdown breaks the whole
+    message on an unescaped _/*/[, whereas HTML only needs </>/& escaped."""
+    lines = [f"<b>Daily Briefing — {output['generated_at'][:10]}</b>"]
+
+    weather = output.get("weather", {})
+    if weather:
+        lines += ["", "<b>Weather:</b>"]
+        lines += [_format_weather_entry(loc, info) for loc, info in weather.items()]
 
     indices = output.get("markets", {}).get("indices", [])
     movers = [idx for idx in indices if not idx.get("error")]
     if movers:
-        lines += ["", "*Markets:*"]
+        lines += ["", "<b>Markets:</b>"]
         lines += [
-            f"- {idx['label']}: {'+' if idx['change'] >= 0 else ''}{idx['pct_change']:.2f}%"
+            f"- {html.escape(idx['label'])}: {'+' if idx['change'] >= 0 else ''}{idx['pct_change']:.2f}%"
             for idx in movers
         ]
 
-    return "\n".join(lines)
+    news = output.get("news", {})
+
+    world_news = news.get("world_news", [])
+    if world_news:
+        lines += ["", "<b>World News:</b>"]
+        lines += [_format_news_link(item) for item in world_news[:3]]
+
+    for loc, headlines in news.get("local_news", {}).items():
+        if headlines:
+            lines += ["", f"<b>{html.escape(loc)} News:</b>"]
+            lines += [_format_news_link(item) for item in headlines[:2]]
+
+    return "\n".join(_truncate_lines(lines, TELEGRAM_MAX_LENGTH))
 
 
 def main():

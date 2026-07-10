@@ -22,16 +22,20 @@ def _load_auth():
 
 
 def send_message(text):
-    """Send a Markdown-formatted message via the Telegram Bot API. Returns
-    True on success, False if not configured or the request failed — never
-    raises, since a failed notification shouldn't break briefing generation."""
+    """Send an HTML-formatted message via the Telegram Bot API. HTML mode
+    (not legacy Markdown) because it only requires escaping &/</>, whereas
+    Markdown breaks the whole message if a headline title happens to contain
+    an unescaped _, *, or [ — real risk once messages include news titles.
+    Returns True on success, False if not configured or the request
+    failed — never raises, since a failed notification shouldn't break
+    briefing generation."""
     auth = _load_auth()
     if not auth:
         return False
     try:
         resp = requests.post(
             f"https://api.telegram.org/bot{auth['bot_token']}/sendMessage",
-            json={"chat_id": auth["chat_id"], "text": text, "parse_mode": "Markdown"},
+            json={"chat_id": auth["chat_id"], "text": text, "parse_mode": "HTML"},
             timeout=10,
         )
         resp.raise_for_status()
