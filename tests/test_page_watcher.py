@@ -303,6 +303,39 @@ def test_check_price_page_skips_notify_below_threshold(tmp_path, monkeypatch):
     assert state["Price Page"]["last_price"] == 30.00
 
 
+def test_is_plausible_price_accepts_normal_moves():
+    assert watcher._is_plausible_price(100.0, 105.0) is True
+    assert watcher._is_plausible_price(100.0, 40.0) is True  # a real flash-sale-sized drop
+    assert watcher._is_plausible_price(100.0, 400.0) is True  # right at the boundary
+
+
+def test_is_plausible_price_rejects_extreme_jumps():
+    assert watcher._is_plausible_price(1359.99, 9.99) is False  # e.g. grabbed a shipping fee
+    assert watcher._is_plausible_price(9.99, 1359.99) is False
+
+
+def test_check_price_page_skips_implausible_jump_without_notifying_or_persisting(tmp_path, monkeypatch):
+    """A wildly wrong extraction (wrong element grabbed) must not be treated
+    as a real price move — no false alarm, and the reference price must
+    survive so a later good reading still compares correctly."""
+    monkeypatch.setattr(watcher, "CONFIG_FILE", tmp_path / "page_watch_config.json")
+    monkeypatch.setattr(watcher, "STATE_FILE", tmp_path / "page_watch_state.json")
+    (tmp_path / "page_watch_config.json").write_text(json.dumps({"pages": [_price_page(threshold=10)]}), encoding="utf-8")
+    watcher._save_state({"Price Page": {"reference_price": 1359.99, "last_price": 1359.99, "last_checked_at": "2020-01-01T00:00:00+00:00"}})
+    # Fixture reports $30.00 — wildly implausible next to a $1359.99 reference.
+    monkeypatch.setattr(watcher.requests, "get", lambda url, headers, timeout: _FakeResponse(AMAZON_TWISTER_HTML))
+
+    sent_messages = []
+    monkeypatch.setattr(watcher.telegram_notify, "send_message", lambda text: sent_messages.append(text) or True)
+
+    results = watcher.check()
+
+    assert sent_messages == []
+    assert "implausible" in results[0]
+    state = watcher._load_state()
+    assert state["Price Page"]["reference_price"] == 1359.99  # untouched, will retry next cycle
+
+
 def test_check_price_page_throttles_by_interval(tmp_path, monkeypatch):
     monkeypatch.setattr(watcher, "CONFIG_FILE", tmp_path / "page_watch_config.json")
     monkeypatch.setattr(watcher, "STATE_FILE", tmp_path / "page_watch_state.json")

@@ -79,6 +79,15 @@ PRICE_PATTERN = re.compile(r"\$\s?([\d,]+\.\d{2})")
 
 DEFAULT_PRICE_CHECK_INTERVAL_MINUTES = 240
 
+# A single check-to-check ratio outside this band is treated as a probable
+# extraction error (grabbed the wrong element — a shipping fee, a bundled
+# accessory, an unrelated sponsored item) rather than a real price move,
+# even for a page with a generous notify threshold. Real prices essentially
+# never jump 5x or drop to a fifth of their previous value between two
+# checks 15 minutes to 4 hours apart; a wrong-element grab easily produces
+# exactly that.
+PLAUSIBLE_PRICE_RATIO = (0.2, 5.0)
+
 # Phrases Amazon's anti-bot page actually contains — seen live when a bare
 # User-Agent-only request was blocked. A false "blocked" positive just
 # means one skipped check; a false negative would misread a CAPTCHA page's
@@ -242,6 +251,11 @@ def _extract_price(html_content, css_selector=None):
     return float(match.group(1).replace(",", "")) if match else None
 
 
+def _is_plausible_price(reference_price, new_price):
+    low, high = PLAUSIBLE_PRICE_RATIO
+    return low <= (new_price / reference_price) <= high
+
+
 def _build_price_notification(name, url, old_price, new_price, pct_change):
     direction = "dropped" if pct_change < 0 else "risen"
     icon = "\U0001F4C9" if pct_change < 0 else "\U0001F4C8"
@@ -255,7 +269,11 @@ def _build_price_notification(name, url, old_price, new_price, pct_change):
 def _check_price_page(name, url, css_selector, threshold_pct, interval_minutes, state):
     """Deterministic percent-change price check — mutates `state[name]` in
     place and returns a human-readable result line. See module docstring for
-    why this doesn't use the local model or this script's usual 15-min cadence."""
+    why this doesn't use the local model or this script's usual 15-min cadence.
+    An implausible price jump (see _is_plausible_price) is treated like a
+    fetch error: logged, not notified, state left untouched so the next
+    cycle retries against the same reference rather than resetting to a
+    probably-wrong number."""
     now = datetime.now(timezone.utc)
     entry = state.get(name)
 
@@ -282,6 +300,14 @@ def _check_price_page(name, url, css_selector, threshold_pct, interval_minutes, 
         return f"{name}: baseline captured (${price:.2f}), nothing to compare yet"
 
     reference_price = entry["reference_price"]
+
+    if not _is_plausible_price(reference_price, price):
+        return (
+            f"{name}: extracted price ${price:.2f} looks implausible next to reference "
+            f"${reference_price:.2f} (likely grabbed the wrong element) — skipping, "
+            "not updating state; will retry next cycle"
+        )
+
     pct_change = (price - reference_price) / reference_price * 100
 
     if abs(pct_change) >= threshold_pct:
