@@ -205,6 +205,35 @@ def render_markets_tab():
         st.caption("No individual tickers tracked yet — add some to briefing_config.json.")
 
 
+def render_headline(item):
+    """One story: optional thumbnail, clickable title, source + date, and a
+    snippet when one's available (Google-sourced items have no snippet)."""
+    date_str = item["published"][:10]
+    if item.get("image"):
+        img_col, text_col = st.columns([1, 5])
+        with img_col:
+            st.image(item["image"], width='stretch')
+    else:
+        text_col = st.container()
+
+    with text_col:
+        st.markdown(f"**[{item['title']}]({item['url']})**")
+        caption = item["source"] or "Unknown source"
+        if date_str:
+            caption += f" · {date_str}"
+        st.caption(caption)
+        if item.get("body"):
+            st.caption(item["body"])
+
+
+def render_news_section(header, headlines):
+    if not headlines:
+        return
+    st.subheader(header)
+    for item in headlines:
+        render_headline(item)
+
+
 tab_weather, tab_markets, tab_news, tab_reddit = st.tabs(
     ["☀️ Weather", "📈 Markets", "📰 News", "👽 Reddit"]
 )
@@ -217,6 +246,14 @@ with tab_markets:
 
 with tab_news:
     st.markdown(data.get("news_text", "No news available."))
+    st.divider()
+
+    news = data.get("news", {})
+    for loc, headlines in news.get("local_news", {}).items():
+        render_news_section(loc, headlines)
+    render_news_section("World News", news.get("world_news", []))
+    for topic, headlines in news.get("topics", {}).items():
+        render_news_section(f"Topic: {topic}", headlines)
 
 with tab_reddit:
     for subreddit, posts in data.get("reddit", {}).items():
@@ -228,4 +265,4 @@ with tab_reddit:
                 st.markdown(f"- [{post['title']}]({post['url']})")
 
 with st.expander("Raw data used for this briefing"):
-    st.json(data.get("raw", {}))
+    st.json(data.get("news", {}))

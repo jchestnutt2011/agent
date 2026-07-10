@@ -6,7 +6,7 @@ import ollama
 
 from config import MODEL
 from tools.weather import run as get_weather
-from tools.news import run as get_news
+from tools.news import fetch_headlines as get_headlines
 from tools.reddit import fetch_posts as get_reddit_posts
 from tools.stocks import get_major_indices, get_watchlist
 from tools import telegram_notify
@@ -55,12 +55,30 @@ def gather_markets(config):
     return {"indices": indices, "watchlist": watchlist}
 
 
-def gather_news_raw(config):
-    sections = {}
-    sections["local_news"] = {
-        loc: _safe(f"news for {loc}", get_news, f"{loc} news") for loc in config["locations"]
+def _headlines_for(label, query, max_results=6):
+    """Structured headlines with datetimes serialized to ISO strings so the
+    result is directly JSON-writable (and directly renderable in the
+    Streamlit page, unlike the old LLM-only text blob)."""
+    headlines = _safe(label, get_headlines, query, max_results)
+    if isinstance(headlines, str):
+        return []
+    return [{**h, "published": h["published"].isoformat()} for h in headlines]
+
+
+def gather_news(config):
+    """Structured per-section headlines (title/url/source/date/body/image) —
+    rendered directly in the Streamlit News tab so links are always correct,
+    never at the mercy of the local model reproducing them faithfully."""
+    sections = {
+        "local_news": {
+            loc: _headlines_for(f"news for {loc}", f"{loc} news") for loc in config["locations"]
+        },
+        "world_news": _headlines_for("world news", "world news"),
     }
-    sections["world_news"] = _safe("world news", get_news, "world news")
+    if config.get("topics"):
+        sections["topics"] = {
+            topic: _headlines_for(f"news for topic '{topic}'", topic) for topic in config["topics"]
+        }
     return sections
 
 
@@ -71,16 +89,29 @@ def gather_reddit(config):
     return {sub: _safe(f"r/{sub}", get_reddit_posts, sub) for sub in config["subreddits"]}
 
 
-def synthesize_news(news_raw):
-    raw_text = json.dumps(news_raw, indent=2)
+def synthesize_news(news_sections):
+    """A short skimmable narrative, NOT a link list — the actual headlines
+    with working links are rendered directly from structured data in the
+    Streamlit page, so the model doesn't need to (and shouldn't try to)
+    reproduce titles/URLs faithfully. This is just the "what's going on"
+    framing text above that list."""
+    condensed = {
+        section: (
+            {k: [h["title"] for h in v] for k, v in value.items()}
+            if isinstance(value, dict) else [h["title"] for h in value]
+        )
+        for section, value in news_sections.items()
+    }
+    raw_text = json.dumps(condensed, indent=2)
     prompt = (
-        "You are writing the News section of a daily briefing, based on the raw "
-        "headlines below (grouped by location, plus world news). Organize it with "
-        "a short header per location/world. Keep it skimmable — bullet points, no "
-        "fluff, no repeating the raw text verbatim. Each item includes a "
-        "[YYYY-MM-DD] publish date — keep that date visible in your bullet so the "
-        "reader can judge freshness. Write in Markdown.\n\n"
-        f"Raw headlines:\n{raw_text}"
+        "Here are today's news headlines (grouped by location/topic, plus world "
+        "news) — titles only, no links or dates. Write a short, skimmable "
+        "narrative summary (a few sentences per group, not a bullet-by-bullet "
+        "restatement) covering what's going on. The full headline list with "
+        "working links is shown separately right after your summary, so don't "
+        "try to enumerate every headline or include URLs — just give the "
+        "reader the gist. Write in Markdown with a short header per group.\n\n"
+        f"Headlines:\n{raw_text}"
     )
     response = ollama.chat(model=MODEL, messages=[{"role": "user", "content": prompt}])
     return response["message"]["content"]
@@ -114,17 +145,17 @@ def main():
     # steps already gathered successfully.
     weather = gather_weather(config)
     markets = gather_markets(config)
-    news_raw = gather_news_raw(config)
+    news = gather_news(config)
     reddit = gather_reddit(config)
-    news_text = _safe("news synthesis", synthesize_news, news_raw)
+    news_text = _safe("news synthesis", synthesize_news, news)
 
     output = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "weather": weather,
         "markets": markets,
         "news_text": news_text,
+        "news": news,
         "reddit": reddit,
-        "raw": {"news": news_raw},
     }
 
     # Write atomically so a crash mid-write can't corrupt the last good briefing.
