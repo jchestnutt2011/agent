@@ -17,8 +17,17 @@ Simplification: this treats each alert id as evaluated exactly once for its
 lifetime — if NWS meaningfully updates an in-place alert without changing its
 id, the update won't trigger a fresh decision. Acceptable for v1; revisit if
 it turns out to matter in practice.
+
+NWS also routinely reissues some products (Beach Hazards Statement, Small
+Craft Advisory, etc.) on a fixed cycle as a brand-new alert id with identical
+content — id-only dedup would treat each reissue as new and re-notify every
+cycle. So alerts are also deduped by a content fingerprint (location + event
++ headline + description) against every still-active, already-seen alert:
+a content match is recorded (so future reissues of the same text keep
+matching) but never re-decided or re-sent.
 """
 
+import hashlib
 import html
 import json
 from datetime import datetime, timezone
@@ -119,6 +128,18 @@ def _decide(location, alert):
     return notify, reason, "local model"
 
 
+def _content_key(location, alert):
+    """Fingerprint of an alert's actual content, independent of its (possibly
+    reissued-with-a-new-id) NWS id — used to catch reissues of unchanged
+    alerts that id-based dedup alone would miss."""
+    text = "|".join([
+        location, alert.get("event") or "",
+        (alert.get("headline") or "").strip(),
+        (alert.get("description") or "").strip(),
+    ])
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def _build_notification(location, alert, reason):
     return (
         f"\U0001F326️ <b>Weather alert — {html.escape(location)}</b>\n"
@@ -133,6 +154,7 @@ def check():
     (also used as the log output when run via the scheduled task)."""
     config = _load_config()
     state = _prune_expired(_load_state())
+    known_content_keys = {entry["content_key"] for entry in state.values() if entry.get("content_key")}
     results = []
 
     for location in config.get("locations", []):
@@ -147,6 +169,20 @@ def check():
                 continue  # can't dedup without an id; skip rather than risk spamming
             if alert_id in state:
                 continue  # already evaluated this alert's lifetime
+
+            content_key = _content_key(result["label"], alert)
+            if content_key in known_content_keys:
+                # Same content as an already-handled alert, just reissued under a
+                # new id (NWS does this routinely for some products) — record the
+                # new id so it's not re-checked again, but don't re-decide or re-send.
+                results.append(f"{result['label']}: {alert['event']} — duplicate of an already-handled alert, skipped")
+                state[alert_id] = {
+                    "location": result["label"], "event": alert["event"],
+                    "severity": alert.get("severity"), "expires": alert.get("expires"),
+                    "decided_by": "duplicate content", "reason": "unchanged reissue of an already-handled alert",
+                    "notified": False, "content_key": content_key,
+                }
+                continue
 
             should_notify, reason, decided_by = _decide(result["label"], alert)
 
@@ -168,7 +204,9 @@ def check():
                 "location": result["label"], "event": alert["event"],
                 "severity": alert.get("severity"), "expires": alert.get("expires"),
                 "decided_by": decided_by, "reason": reason, "notified": should_notify,
+                "content_key": content_key,
             }
+            known_content_keys.add(content_key)
 
     _save_state(state)
     return results

@@ -152,6 +152,40 @@ def test_check_skips_low_severity_when_model_says_no(tmp_path, monkeypatch):
     assert monitor._load_state()["minor-alert"]["notified"] is False
 
 
+def test_check_skips_reissued_alert_with_new_id_but_same_content(tmp_path, monkeypatch):
+    monkeypatch.setattr(monitor, "CONFIG_FILE", tmp_path / "briefing_config.json")
+    monkeypatch.setattr(monitor, "STATE_FILE", tmp_path / "alert_monitor_state.json")
+    (tmp_path / "briefing_config.json").write_text('{"locations": ["Topsail Island, NC"]}', encoding="utf-8")
+
+    original = _alert(id="original-id")
+    content_key = monitor._content_key("Topsail Island, NC", original)
+    monitor._save_state({
+        "original-id": {
+            "location": "Topsail Island, NC", "event": original["event"],
+            "severity": original["severity"], "expires": original["expires"],
+            "decided_by": "local model", "reason": "rip currents", "notified": True,
+            "content_key": content_key,
+        }
+    })
+
+    reissued = _alert(id="reissued-id")  # same event/headline/description, new id
+    monkeypatch.setattr(monitor, "get_alerts_for", lambda loc: {"label": loc, "alerts": [reissued]})
+
+    decide_calls = []
+    monkeypatch.setattr(monitor, "_decide", lambda *a: decide_calls.append(a) or (True, "x", "hard floor"))
+    sent_messages = []
+    monkeypatch.setattr(monitor.telegram_notify, "send_message", lambda text: sent_messages.append(text) or True)
+
+    results = monitor.check()
+
+    assert decide_calls == []
+    assert sent_messages == []
+    assert "duplicate" in results[0]
+    state = monitor._load_state()
+    assert state["reissued-id"]["notified"] is False
+    assert state["reissued-id"]["content_key"] == content_key
+
+
 def test_check_handles_location_lookup_error(tmp_path, monkeypatch):
     monkeypatch.setattr(monitor, "CONFIG_FILE", tmp_path / "briefing_config.json")
     monkeypatch.setattr(monitor, "STATE_FILE", tmp_path / "alert_monitor_state.json")
