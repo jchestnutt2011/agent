@@ -300,11 +300,63 @@ def _check_price_page(name, url, css_selector, threshold_pct, interval_minutes, 
     return f"{name}: price ${price:.2f} ({pct_change:+.1f}% from reference ${reference_price:.2f}) — below {threshold_pct}% threshold"
 
 
+def _check_content_page(name, url, css_selector, state):
+    """Content-diff + local-model-judged check for one page — mutates
+    `state[name]` in place and returns a human-readable result line. Split
+    out from check() so each page's dispatch is a single function call with
+    no early `continue`s, which lets check() reliably detect whether a given
+    page's state entry actually changed (see the touched-entries comment
+    there) regardless of which branch returned."""
+    text, error = _fetch_text(url, css_selector)
+    if error:
+        return f"{name}: could not check ({error})"
+
+    new_hash = _content_hash(text)
+    entry = state.get(name)
+
+    if entry is None:
+        state[name] = {
+            "content_hash": new_hash,
+            "content_snippet": text[:SNIPPET_CHARS],
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+        }
+        return f"{name}: baseline captured, nothing to compare yet"
+
+    if entry["content_hash"] == new_hash:
+        return f"{name}: unchanged"
+
+    should_notify, reason = _ask_model_to_decide(name, entry.get("content_snippet", ""), text)
+
+    if should_notify:
+        sent = telegram_notify.send_message(_build_notification(name, url, reason))
+        if not sent:
+            return f"{name}: changed and judged notify-worthy, but Telegram send failed — will retry next run"
+        result = f"{name}: changed — notified ({reason})"
+    else:
+        result = f"{name}: changed — skipped ({reason})"
+
+    state[name] = {
+        "content_hash": new_hash,
+        "content_snippet": text[:SNIPPET_CHARS],
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+    }
+    return result
+
+
 def check():
-    """Runs one monitoring pass. Returns a list of human-readable result lines."""
+    """Runs one monitoring pass. Returns a list of human-readable result lines.
+
+    State is merged, not blindly overwritten: this loop can take a while
+    (fetching several real pages), and page_watch_state.json is also
+    written by the Streamlit price-watch UI. Saving this call's full
+    in-memory snapshot at the end would silently clobber any edit the UI
+    made mid-run. Instead, only pages whose entry actually changed this
+    pass are merged onto whatever's on disk at merge time — see
+    state_store.merge_json_state."""
     config = _load_config()
     state = _load_state()
     results = []
+    touched = {}
 
     for page in config.get("pages", []):
         name = page["name"]
@@ -312,51 +364,18 @@ def check():
         css_selector = page.get("css_selector")
         price_threshold_pct = page.get("price_threshold_pct")
 
+        before = state.get(name)
         if price_threshold_pct is not None:
             interval = page.get("check_interval_minutes", DEFAULT_PRICE_CHECK_INTERVAL_MINUTES)
             results.append(_check_price_page(name, url, css_selector, price_threshold_pct, interval, state))
-            continue
-
-        text, error = _fetch_text(url, css_selector)
-        if error:
-            results.append(f"{name}: could not check ({error})")
-            continue
-
-        new_hash = _content_hash(text)
-        entry = state.get(name)
-
-        if entry is None:
-            state[name] = {
-                "content_hash": new_hash,
-                "content_snippet": text[:SNIPPET_CHARS],
-                "checked_at": datetime.now(timezone.utc).isoformat(),
-            }
-            results.append(f"{name}: baseline captured, nothing to compare yet")
-            continue
-
-        if entry["content_hash"] == new_hash:
-            results.append(f"{name}: unchanged")
-            continue
-
-        should_notify, reason = _ask_model_to_decide(name, entry.get("content_snippet", ""), text)
-
-        if should_notify:
-            sent = telegram_notify.send_message(_build_notification(name, url, reason))
-            if not sent:
-                results.append(f"{name}: changed and judged notify-worthy, but Telegram send failed — will retry next run")
-                continue  # don't persist — retry the full decision next cycle
-
-            results.append(f"{name}: changed — notified ({reason})")
         else:
-            results.append(f"{name}: changed — skipped ({reason})")
+            results.append(_check_content_page(name, url, css_selector, state))
 
-        state[name] = {
-            "content_hash": new_hash,
-            "content_snippet": text[:SNIPPET_CHARS],
-            "checked_at": datetime.now(timezone.utc).isoformat(),
-        }
+        after = state.get(name)
+        if after is not before:
+            touched[name] = after
 
-    _save_state(state)
+    state_store.merge_json_state(STATE_FILE, touched)
     return results
 
 

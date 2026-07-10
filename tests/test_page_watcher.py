@@ -148,6 +148,32 @@ def test_ask_model_to_decide_handles_malformed_json_safely(monkeypatch):
     assert "precaution" in reason
 
 
+def test_check_does_not_clobber_concurrent_write_to_untouched_page(tmp_path, monkeypatch):
+    """Regression test for the page_watch_config/state race: check()'s loop
+    can take a while fetching real pages, during which the Streamlit UI
+    might add/update a different watched page. check() must not overwrite
+    that concurrent write when it persists its own results."""
+    import state_store
+
+    monkeypatch.setattr(watcher, "CONFIG_FILE", tmp_path / "page_watch_config.json")
+    monkeypatch.setattr(watcher, "STATE_FILE", tmp_path / "page_watch_state.json")
+    (tmp_path / "page_watch_config.json").write_text(json.dumps({"pages": [_page(name="Page One")]}), encoding="utf-8")
+
+    def fake_get(url, headers, timeout):
+        # Simulate a concurrent writer (e.g. the Streamlit UI) persisting a
+        # brand-new page's entry while this fetch for Page One is "in flight".
+        state_store.save_json_state(watcher.STATE_FILE, {"Page Two (added concurrently)": {"content_hash": "x"}})
+        return _FakeResponse("<p>Page One content</p>")
+
+    monkeypatch.setattr(watcher.requests, "get", fake_get)
+
+    watcher.check()
+
+    final_state = watcher._load_state()
+    assert "Page One" in final_state  # this run's own result was saved
+    assert "Page Two (added concurrently)" in final_state  # concurrent write survived
+
+
 def test_no_pages_configured_returns_no_results(tmp_path, monkeypatch):
     monkeypatch.setattr(watcher, "CONFIG_FILE", tmp_path / "page_watch_config.json")
     monkeypatch.setattr(watcher, "STATE_FILE", tmp_path / "page_watch_state.json")

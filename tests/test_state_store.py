@@ -1,4 +1,7 @@
 import json
+import time
+
+import pytest
 
 import state_store
 
@@ -30,3 +33,64 @@ def test_save_json_state_writes_atomically_no_leftover_tmp_file(tmp_path):
     state_store.save_json_state(path, {"a": 1})
     assert not path.with_suffix(".tmp").exists()
     assert path.exists()
+
+
+def test_file_lock_excludes_a_second_acquire(tmp_path):
+    path = tmp_path / "state.json"
+    with state_store.file_lock(path, timeout=1):
+        with pytest.raises(TimeoutError):
+            with state_store.file_lock(path, timeout=0.2):
+                pass  # should never get here — lock is already held
+
+
+def test_file_lock_releases_on_exit(tmp_path):
+    path = tmp_path / "state.json"
+    with state_store.file_lock(path):
+        pass
+    # A second acquire right after must succeed immediately, not time out.
+    with state_store.file_lock(path, timeout=1):
+        pass
+
+
+def test_file_lock_cleans_up_stale_lock_from_a_dead_process(tmp_path, monkeypatch):
+    path = tmp_path / "state.json"
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    lock_path.write_text("", encoding="utf-8")
+    # Backdate the lock file's mtime past the staleness threshold.
+    stale_time = time.time() - state_store.STALE_LOCK_SECONDS - 1
+    import os
+    os.utime(lock_path, (stale_time, stale_time))
+
+    # Must acquire despite the "held" lock, since it's older than the
+    # staleness threshold — a crashed process's lock can't wedge this forever.
+    with state_store.file_lock(path, timeout=1):
+        pass
+
+
+def test_merge_json_state_merges_onto_current_disk_contents_not_caller_snapshot(tmp_path):
+    """The exact race this exists to prevent: caller A loads state, caller B
+    (e.g. the Streamlit UI) writes a change to an untouched key, then caller
+    A finishes and merges its own update. B's write must survive."""
+    path = tmp_path / "state.json"
+    state_store.save_json_state(path, {"page_one": {"v": 1}})
+
+    # Caller A's stale in-memory view, taken before B's write below.
+    a_snapshot_before_b_wrote = state_store.load_json_state(path)
+    assert "page_two" not in a_snapshot_before_b_wrote
+
+    # Caller B writes a new key directly (simulating the Streamlit UI).
+    state_store.save_json_state(path, {**a_snapshot_before_b_wrote, "page_two": {"v": 2}})
+
+    # Caller A now merges only what it touched (page_one), unaware of page_two.
+    state_store.merge_json_state(path, {"page_one": {"v": 99}})
+
+    final = state_store.load_json_state(path)
+    assert final["page_one"] == {"v": 99}
+    assert final["page_two"] == {"v": 2}  # not clobbered
+
+
+def test_merge_json_state_no_op_on_empty_updates(tmp_path):
+    path = tmp_path / "state.json"
+    state_store.save_json_state(path, {"a": 1})
+    state_store.merge_json_state(path, {})
+    assert state_store.load_json_state(path) == {"a": 1}

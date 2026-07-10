@@ -3,6 +3,7 @@ import json
 import streamlit as st
 
 import page_watcher
+import state_store
 
 st.set_page_config(page_title="Price Watch", page_icon="\U0001F4B0", layout="wide")
 st.title("Price Watch")
@@ -26,9 +27,13 @@ def _load_pages():
 
 
 def _save_pages(pages):
-    config = page_watcher._load_config()
-    config["pages"] = pages
-    page_watcher.CONFIG_FILE.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    # Locked read-modify-write: page_watch_config.json is only ever written
+    # from this UI (page_watcher.py's scheduled run only reads it), but two
+    # browser tabs/reruns could still race on it.
+    with state_store.file_lock(page_watcher.CONFIG_FILE):
+        config = page_watcher._load_config()
+        config["pages"] = pages
+        page_watcher.CONFIG_FILE.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
 
 st.subheader("Add a page to watch")
@@ -56,12 +61,18 @@ if submitted:
     elif any(p["name"] == name for p in _load_pages()):
         st.error(f"A watched page named '{name}' already exists — pick a different name.")
     else:
-        state = page_watcher._load_state()
+        # A scratch dict, not the live state file — _check_price_page only
+        # needs somewhere to read/write this one page's entry while
+        # deciding. The real file is updated below via a locked merge, not
+        # by saving this whole (single-entry) snapshot over it, so this
+        # can't clobber anything the scheduled page_watcher.py run or
+        # another browser tab wrote in the meantime.
+        scratch = {}
         with st.spinner(f"Fetching {url} ..."):
             result = page_watcher._check_price_page(
-                name, url, css_selector or None, threshold, INTERVAL_OPTIONS[interval_label], state
+                name, url, css_selector or None, threshold, INTERVAL_OPTIONS[interval_label], scratch
             )
-        if name not in state:
+        if name not in scratch:
             st.error(f"Couldn't add this page: {result}")
         else:
             pages = _load_pages()
@@ -73,7 +84,7 @@ if submitted:
                 **({"css_selector": css_selector} if css_selector else {}),
             })
             _save_pages(pages)
-            page_watcher._save_state(state)
+            state_store.merge_json_state(page_watcher.STATE_FILE, scratch)
             st.success(f"Added — {result}")
             st.rerun()
 
@@ -96,8 +107,14 @@ else:
             with remove_col:
                 if st.button("Remove", key=f"remove_{page['name']}"):
                     _save_pages([p for p in pages if p["name"] != page["name"]])
-                    state.pop(page["name"], None)
-                    page_watcher._save_state(state)
+                    # Locked delete: re-read fresh under the lock rather than
+                    # popping from the `state` snapshot loaded at the top of
+                    # this render, so a concurrent write to a different page
+                    # (scheduled run or another tab) isn't lost.
+                    with state_store.file_lock(page_watcher.STATE_FILE):
+                        fresh_state = page_watcher._load_state()
+                        fresh_state.pop(page["name"], None)
+                        page_watcher._save_state(fresh_state)
                     st.rerun()
 
             cols = st.columns(4)
@@ -118,11 +135,21 @@ else:
             st.caption(f"Last checked: {checked_at or 'never'}")
 
             if st.button("Check now", key=f"check_{page['name']}"):
+                # Seed a scratch dict with just this page's current entry
+                # (freshly loaded, not the whole-file `state` read at the
+                # top of this render) so _check_price_page's reference-price
+                # comparison is correct, then merge only this page's result
+                # back — see the Add flow above for why a full-state save
+                # would be unsafe here.
+                fresh_entry = page_watcher._load_state().get(page["name"])
+                scratch = {page["name"]: fresh_entry} if fresh_entry is not None else {}
+                before = scratch.get(page["name"])
                 with st.spinner("Checking..."):
                     result = page_watcher._check_price_page(
                         page["name"], page["url"], page.get("css_selector"),
-                        page["price_threshold_pct"], 0, state,
+                        page["price_threshold_pct"], 0, scratch,
                     )
-                page_watcher._save_state(state)
+                if scratch.get(page["name"]) is not before:
+                    state_store.merge_json_state(page_watcher.STATE_FILE, scratch)
                 st.info(result)
                 st.rerun()
