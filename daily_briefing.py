@@ -1,5 +1,4 @@
 import json
-import time
 from datetime import datetime
 from pathlib import Path
 
@@ -68,12 +67,7 @@ def gather_reddit(config):
     """Kept separate from the LLM-synthesized sections: rendered as-is (title + link)
     so every subreddit is guaranteed to show up, with no risk of the model dropping
     or rewriting entries during summarization."""
-    reddit = {}
-    for i, sub in enumerate(config["subreddits"]):
-        if i > 0:
-            time.sleep(10)
-        reddit[sub] = _safe(f"r/{sub}", get_reddit_posts, sub)
-    return reddit
+    return {sub: _safe(f"r/{sub}", get_reddit_posts, sub) for sub in config["subreddits"]}
 
 
 def synthesize_news(news_raw):

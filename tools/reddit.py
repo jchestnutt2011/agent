@@ -1,9 +1,17 @@
+import json
 import time
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 import requests
 
 ATOM_NS = "{http://www.w3.org/2005/Atom}"
+
+# Reddit throttles unauthenticated RSS to ~1 req/min as of mid-2026. Appending
+# the user/feed params from https://www.reddit.com/prefs/feeds/ (private,
+# gitignored — never commit this file) bypasses that limit even for public
+# subreddit feeds.
+AUTH_FILE = Path(__file__).parent.parent / "reddit_auth.json"
 
 HEADERS = {
     "User-Agent": (
@@ -11,6 +19,18 @@ HEADERS = {
         "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
     )
 }
+
+
+def _load_auth():
+    if not AUTH_FILE.exists():
+        return {}
+    try:
+        data = json.loads(AUTH_FILE.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    if not data.get("user") or not data.get("feed"):
+        return {}
+    return {"user": data["user"], "feed": data["feed"]}
 
 SCHEMA = {
     "type": "function",
@@ -32,10 +52,11 @@ SCHEMA = {
 def fetch_posts(subreddit, limit=5):
     """Returns a list of {'title', 'url'} dicts, or a string error message."""
     url = f"https://www.reddit.com/r/{subreddit}/top/.rss"
+    params = {"t": "day", "limit": limit, **_load_auth()}
 
     resp = None
     for attempt in range(3):
-        resp = requests.get(url, params={"t": "day", "limit": limit}, headers=HEADERS, timeout=10)
+        resp = requests.get(url, params=params, headers=HEADERS, timeout=10)
         if resp.status_code != 429:
             break
         time.sleep(15 * (attempt + 1))

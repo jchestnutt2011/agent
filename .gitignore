@@ -6,3 +6,4 @@ briefing.json
 weather_log.txt
 *.log
 .claude/
+reddit_auth.json
