@@ -1,0 +1,6 @@
+{
+  "disk_path": "C:\\",
+  "min_free_gb": 10,
+  "ollama_url": "http://localhost:11434/api/version",
+  "streamlit_url": "http://localhost:8501"
+}
