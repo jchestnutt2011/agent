@@ -5,7 +5,8 @@ agent_memory.json
 briefing.json
 weather_log.txt
 *.log
-.claude/
+.claude/*
+!.claude/skills
 reddit_auth.json
 finnhub_auth.json
 telegram_auth.json
