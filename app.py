@@ -1,3 +1,4 @@
+import concurrent.futures
 import hashlib
 
 import streamlit as st
@@ -51,6 +52,23 @@ for msg in st.session_state.messages:
 MAX_TOOL_ITERATIONS = 8
 
 
+def _execute_tool(call):
+    """Runs in a worker thread — must not touch Streamlit (st.*) or any
+    other main-thread-only API. Every tool module either does pure network
+    I/O or, for shared local state (tools/memory.py), its own internal
+    locking — see that module's comments for why that matters now that
+    calls in the same turn can run concurrently."""
+    name = call["function"]["name"]
+    args = call["function"]["arguments"]
+    func = dispatch.get(name)
+    if func is None:
+        return f"Unknown tool: {name}"
+    try:
+        return func(**args)
+    except Exception as e:
+        return f"Tool {name} failed: {e}"
+
+
 def run_turn(messages):
     """Call the model, executing any tool calls, until it returns a final answer."""
     for _ in range(MAX_TOOL_ITERATIONS):
@@ -68,18 +86,21 @@ def run_turn(messages):
         if not tool_calls:
             return msg.get("content", "")
 
-        for call in tool_calls:
-            name = call["function"]["name"]
-            args = call["function"]["arguments"]
-            func = dispatch.get(name)
-            if func is None:
-                result = f"Unknown tool: {name}"
-            else:
-                with st.spinner(f"Running {name}..."):
-                    try:
-                        result = func(**args)
-                    except Exception as e:
-                        result = f"Tool {name} failed: {e}"
+        names = ", ".join(call["function"]["name"] for call in tool_calls)
+        with st.spinner(f"Running {names}..."):
+            # Independent tool calls (e.g. weather + news in one turn) run
+            # concurrently instead of one-at-a-time — each is its own
+            # network round trip, so this cuts wall-clock time on any turn
+            # that requests more than one. executor.map preserves input
+            # order in its results, which matters: Ollama matches each
+            # appended tool message back to its tool_call by position, not
+            # by an explicit id, so results must be appended in the same
+            # order tool_calls arrived in even though they didn't finish
+            # in that order.
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(tool_calls)) as executor:
+                results = list(executor.map(_execute_tool, tool_calls))
+
+        for result in results:
             messages.append({"role": "tool", "content": str(result)})
 
     return "I wasn't able to finish that after several tool calls — could you rephrase or simplify the request?"

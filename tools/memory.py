@@ -1,6 +1,7 @@
 import difflib
-import json
 from pathlib import Path
+
+import state_store
 
 MEMORY_FILE = Path(__file__).parent.parent / "agent_memory.json"
 
@@ -37,18 +38,7 @@ SCHEMA = {
 
 
 def _load():
-    if not MEMORY_FILE.exists():
-        return {}
-    try:
-        return json.loads(MEMORY_FILE.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
-
-
-def _save(data):
-    tmp_file = MEMORY_FILE.with_suffix(".tmp")
-    tmp_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    tmp_file.replace(MEMORY_FILE)
+    return state_store.load_json_state(MEMORY_FILE)
 
 
 def _closest_key(key, data):
@@ -64,18 +54,23 @@ def _closest_key(key, data):
 
 
 def run(action, key=None, value=None):
-    data = _load()
-
     if action == "save":
         if not key or value is None:
             return "save requires both 'key' and 'value'."
-        data[key] = value
-        _save(data)
+        # Locked merge, not load-mutate-save of a snapshot: the system
+        # prompt tells the model to call this tool once per fact when a
+        # message has several ("her name AND a preference"), and app.py
+        # runs a turn's tool calls concurrently — two saves landing in the
+        # same turn is an expected, not hypothetical, case. A plain
+        # load-then-save here would let the second writer silently clobber
+        # the first's key with a stale snapshot that never saw it.
+        state_store.merge_json_state(MEMORY_FILE, {key: value})
         return f"Saved memory '{key}'."
 
     if action == "recall":
         if not key:
             return "recall requires 'key'."
+        data = _load()
         if key in data:
             return data[key]
         fallback = _closest_key(key, data)
@@ -84,6 +79,7 @@ def run(action, key=None, value=None):
         return f"No memory found for '{key}'."
 
     if action == "list":
+        data = _load()
         if not data:
             return "No memories stored yet."
         return "\n".join(f"- {k}: {v}" for k, v in data.items())
@@ -91,10 +87,12 @@ def run(action, key=None, value=None):
     if action == "forget":
         if not key:
             return "forget requires 'key'."
-        if key in data:
+        with state_store.file_lock(MEMORY_FILE):
+            data = _load()
+            if key not in data:
+                return f"No memory found for '{key}'."
             del data[key]
-            _save(data)
-            return f"Forgot memory '{key}'."
-        return f"No memory found for '{key}'."
+            state_store.save_json_state(MEMORY_FILE, data)
+        return f"Forgot memory '{key}'."
 
     return f"Unknown action: {action}"
