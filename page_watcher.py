@@ -47,7 +47,7 @@ import requests
 from bs4 import BeautifulSoup
 
 import state_store
-from config import MODEL
+from config import KEEP_ALIVE, MODEL, NOTIFY_DECISION_SCHEMA, NUM_CTX
 from tools import telegram_notify
 from tools.http_headers import BROWSER_HEADERS
 
@@ -152,8 +152,11 @@ def _ask_model_to_decide(page_name, old_text, new_text):
     """Local model judges whether a text change is meaningful (price change,
     restock, new content) versus noise (ad rotation, view counters, relative
     timestamps like "updated 3 minutes ago") that a plain hash-diff can't
-    tell apart. Structured JSON output for reliable parsing from a 7B model,
-    same as weather_alert_monitor.py's decision call."""
+    tell apart. format=NOTIFY_DECISION_SCHEMA grammar-constrains generation
+    to that exact shape (same as weather_alert_monitor.py's decision call),
+    so a well-behaved call cannot return malformed JSON — the except below
+    is defense against Ollama itself being unreachable/erroring, not
+    against bad output."""
     prompt = (
         "A webpage's content changed since it was last checked. Decide "
         "whether this is a change a person watching this page would "
@@ -171,13 +174,16 @@ def _ask_model_to_decide(page_name, old_text, new_text):
         response = ollama.chat(
             model=MODEL,
             messages=[{"role": "user", "content": prompt}],
-            format="json",
+            format=NOTIFY_DECISION_SCHEMA,
+            keep_alive=KEEP_ALIVE,
+            options={"num_ctx": NUM_CTX},
         )
         decision = json.loads(response["message"]["content"])
         return bool(decision.get("notify")), str(decision.get("reason") or "no reason given")
     except Exception as e:
-        # Malformed/failed model output shouldn't crash the monitor or block
-        # future checks — skip this one with a clear reason and move on.
+        # Ollama unreachable, timed out, or some other failure shouldn't
+        # crash the monitor or block future checks — skip this one with a
+        # clear reason and move on.
         return False, f"model decision failed, skipped as a precaution: {e}"
 
 

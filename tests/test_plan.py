@@ -4,7 +4,7 @@ import tools.plan as plan
 def test_run_drafts_critiques_and_revises_in_three_calls(monkeypatch):
     calls = []
 
-    def fake_chat(model, messages):
+    def fake_chat(model, messages, **kwargs):
         calls.append(messages[0]["content"])
         n = len(calls)
         content = {1: "DRAFT", 2: "CRITIQUE", 3: "FINAL"}[n]
@@ -30,7 +30,7 @@ def test_run_never_asks_the_user_a_clarifying_question_in_its_prompts():
 
 
 def test_run_returns_error_string_instead_of_raising_on_ollama_failure(monkeypatch):
-    def raise_error(model, messages):
+    def raise_error(model, messages, **kwargs):
         raise ConnectionError("ollama not running")
 
     monkeypatch.setattr(plan.ollama, "chat", raise_error)
@@ -43,7 +43,7 @@ def test_run_returns_error_string_instead_of_raising_on_ollama_failure(monkeypat
 
 def test_run_strips_whitespace_from_model_output(monkeypatch):
     monkeypatch.setattr(
-        plan.ollama, "chat", lambda model, messages: {"message": {"content": "  FINAL PLAN  \n"}}
+        plan.ollama, "chat", lambda model, messages, **kwargs: {"message": {"content": "  FINAL PLAN  \n"}}
     )
     result = plan.run("plan a birthday party")
     assert result == "FINAL PLAN"

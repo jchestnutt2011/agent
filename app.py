@@ -3,7 +3,7 @@ import hashlib
 import streamlit as st
 import ollama
 
-from config import MODEL
+from config import KEEP_ALIVE, MODEL, NUM_CTX
 from tool_registry import load_tools
 from tools.voice_input import transcribe
 
@@ -54,7 +54,13 @@ MAX_TOOL_ITERATIONS = 8
 def run_turn(messages):
     """Call the model, executing any tool calls, until it returns a final answer."""
     for _ in range(MAX_TOOL_ITERATIONS):
-        response = ollama.chat(model=MODEL, messages=messages, tools=schemas)
+        response = ollama.chat(
+            model=MODEL,
+            messages=messages,
+            tools=schemas,
+            keep_alive=KEEP_ALIVE,
+            options={"num_ctx": NUM_CTX},
+        )
         msg = response["message"]
         messages.append(msg)
 

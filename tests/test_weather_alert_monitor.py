@@ -94,7 +94,7 @@ def test_decide_moderate_defers_to_model(monkeypatch):
 
 
 def test_ask_model_to_decide_parses_valid_json(monkeypatch):
-    monkeypatch.setattr(monitor.ollama, "chat", lambda model, messages, format: {
+    monkeypatch.setattr(monitor.ollama, "chat", lambda model, messages, **kwargs: {
         "message": {"content": '{"notify": true, "reason": "rip currents"}'}
     })
     notify, reason = monitor._ask_model_to_decide("Topsail Island, NC", _alert())
@@ -103,7 +103,7 @@ def test_ask_model_to_decide_parses_valid_json(monkeypatch):
 
 
 def test_ask_model_to_decide_handles_malformed_json_safely(monkeypatch):
-    monkeypatch.setattr(monitor.ollama, "chat", lambda model, messages, format: {
+    monkeypatch.setattr(monitor.ollama, "chat", lambda model, messages, **kwargs: {
         "message": {"content": "not valid json"}
     })
     notify, reason = monitor._ask_model_to_decide("Topsail Island, NC", _alert())

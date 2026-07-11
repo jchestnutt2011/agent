@@ -5,7 +5,7 @@ from pathlib import Path
 
 import ollama
 
-from config import MODEL
+from config import KEEP_ALIVE, MODEL, NUM_CTX
 from tools.weather import get_conditions
 from tools.news import fetch_headlines as get_headlines
 from tools.reddit import fetch_posts as get_reddit_posts
@@ -119,7 +119,12 @@ def synthesize_news(news_sections):
         "reader the gist. Write in Markdown with a short header per group.\n\n"
         f"Headlines:\n{raw_text}"
     )
-    response = ollama.chat(model=MODEL, messages=[{"role": "user", "content": prompt}])
+    response = ollama.chat(
+        model=MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        keep_alive=KEEP_ALIVE,
+        options={"num_ctx": NUM_CTX},
+    )
     return response["message"]["content"]
 
 

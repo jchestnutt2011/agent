@@ -41,7 +41,7 @@ from pathlib import Path
 import ollama
 
 import state_store
-from config import MODEL
+from config import KEEP_ALIVE, MODEL, NOTIFY_DECISION_SCHEMA, NUM_CTX
 from tools.weather import get_alerts_for
 from tools import telegram_notify
 
@@ -111,8 +111,10 @@ def _prune_stale(state, seen_ids, checked_locations):
 
 def _ask_model_to_decide(location, alert):
     """For alerts below the hard severity floor: ask the local model whether
-    this is worth proactively notifying about. Structured JSON output so a
-    7B local model's response is reliably parseable instead of free text."""
+    this is worth proactively notifying about. format=NOTIFY_DECISION_SCHEMA
+    grammar-constrains generation to that exact shape, so a well-behaved
+    call cannot return malformed JSON — the except below is defense against
+    Ollama itself being unreachable/erroring, not against bad output."""
     prompt = (
         "A weather alert was just issued. Decide whether a homeowner should "
         "be proactively pinged about it on their phone right now, or whether "
@@ -133,13 +135,16 @@ def _ask_model_to_decide(location, alert):
         response = ollama.chat(
             model=MODEL,
             messages=[{"role": "user", "content": prompt}],
-            format="json",
+            format=NOTIFY_DECISION_SCHEMA,
+            keep_alive=KEEP_ALIVE,
+            options={"num_ctx": NUM_CTX},
         )
         decision = json.loads(response["message"]["content"])
         return bool(decision.get("notify")), str(decision.get("reason") or "no reason given")
     except Exception as e:
-        # Malformed/failed model output shouldn't crash the monitor or block
-        # future alerts — skip this one with a clear reason and move on.
+        # Ollama unreachable, timed out, or some other failure shouldn't
+        # crash the monitor or block future alerts — skip this one with a
+        # clear reason and move on.
         return False, f"model decision failed, skipped as a precaution: {e}"
 
 

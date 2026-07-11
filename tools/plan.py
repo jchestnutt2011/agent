@@ -12,7 +12,7 @@ calls, not one; latency is an acceptable tradeoff for this kind of request.
 
 import ollama
 
-from config import MODEL
+from config import KEEP_ALIVE, MODEL, NUM_CTX
 
 SCHEMA = {
     "type": "function",
@@ -73,7 +73,12 @@ Final revised plan (Assumptions, then Plan):"""
 
 
 def _ask(prompt):
-    response = ollama.chat(model=MODEL, messages=[{"role": "user", "content": prompt}])
+    response = ollama.chat(
+        model=MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        keep_alive=KEEP_ALIVE,
+        options={"num_ctx": NUM_CTX},
+    )
     return response["message"]["content"].strip()
 
 

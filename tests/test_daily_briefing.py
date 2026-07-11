@@ -208,7 +208,7 @@ def test_gather_news_includes_topics_when_configured(monkeypatch):
 def test_synthesize_news_prompt_excludes_urls_and_dates(monkeypatch):
     captured = {}
 
-    def fake_chat(model, messages):
+    def fake_chat(model, messages, **kwargs):
         captured["prompt"] = messages[0]["content"]
         return {"message": {"content": "summary"}}
 

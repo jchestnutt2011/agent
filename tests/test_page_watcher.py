@@ -171,7 +171,7 @@ def test_check_handles_fetch_failure_gracefully(tmp_path, monkeypatch):
 
 
 def test_ask_model_to_decide_handles_malformed_json_safely(monkeypatch):
-    monkeypatch.setattr(watcher.ollama, "chat", lambda model, messages, format: {
+    monkeypatch.setattr(watcher.ollama, "chat", lambda model, messages, **kwargs: {
         "message": {"content": "not valid json"}
     })
     notify, reason = watcher._ask_model_to_decide("Test Page", "old", "new")
