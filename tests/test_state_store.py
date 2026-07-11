@@ -67,6 +67,32 @@ def test_file_lock_cleans_up_stale_lock_from_a_dead_process(tmp_path, monkeypatc
         pass
 
 
+def test_file_lock_retries_on_permission_error_not_just_file_exists_error(tmp_path, monkeypatch):
+    """Windows can raise PermissionError (WinError 5) instead of
+    FileExistsError from os.open(O_CREAT|O_EXCL) when another thread is
+    concurrently unlinking/recreating the exact same lock filename — an
+    NTFS delete-pending race. Reproduced for real under a 20-thread stress
+    test on tools/memory.py's locked saves (state_store.py:61). This
+    deterministically forces that path instead of relying on timing."""
+    import os as os_module
+    path = tmp_path / "state.json"
+    real_open = os_module.open
+    calls = []
+
+    def flaky_open(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise PermissionError("simulated WinError 5 delete-pending race")
+        return real_open(*args, **kwargs)
+
+    monkeypatch.setattr(state_store.os, "open", flaky_open)
+
+    with state_store.file_lock(path, timeout=1):
+        pass  # must not raise — the PermissionError must be retried, not propagated
+
+    assert len(calls) >= 2
+
+
 def test_merge_json_state_merges_onto_current_disk_contents_not_caller_snapshot(tmp_path):
     """The exact race this exists to prevent: caller A loads state, caller B
     (e.g. the Streamlit UI) writes a change to an untouched key, then caller

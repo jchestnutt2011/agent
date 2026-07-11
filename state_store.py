@@ -60,13 +60,23 @@ def file_lock(path, timeout=5, poll_interval=0.05):
         try:
             fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             break
-        except FileExistsError:
+        except (FileExistsError, PermissionError):
+            # Windows can raise PermissionError (WinError 5) instead of
+            # FileExistsError here when another thread is concurrently
+            # unlinking/recreating this exact filename — an NTFS
+            # delete-pending race, reproduced under a 20-thread stress
+            # test on tools/memory.py's locked saves. Treat it the same as
+            # "lock is currently contested": fall through to the stale
+            # check and retry, don't let it escape as a fatal error.
             try:
                 if time.time() - lock_path.stat().st_mtime > STALE_LOCK_SECONDS:
-                    lock_path.unlink()
+                    try:
+                        lock_path.unlink()
+                    except (FileNotFoundError, PermissionError):
+                        pass  # another thread already cleaned it up — fine either way
                     continue  # retry immediately, no need to wait out the poll interval
-            except FileNotFoundError:
-                continue  # lock was released between our open() and stat() — retry now
+            except (FileNotFoundError, PermissionError):
+                continue  # lock was released/contested between our open() and stat() — retry now
             if time.monotonic() >= deadline:
                 raise TimeoutError(f"Could not acquire lock on {lock_path} within {timeout}s")
             time.sleep(poll_interval)
@@ -77,7 +87,7 @@ def file_lock(path, timeout=5, poll_interval=0.05):
     finally:
         try:
             lock_path.unlink()
-        except FileNotFoundError:
+        except (FileNotFoundError, PermissionError):
             pass
 
 

@@ -56,6 +56,17 @@ watched jobs (see `job_watchdog_config.json`) — a broken rotation would
 otherwise defeat its own purpose by failing silently while the log grows
 unbounded anyway.
 
+`chat_log_review.py` reads `chat_log.jsonl` (+ `.previous` by default) and
+prints an aggregate summary — tool call counts, error rates, turns where
+no tool was used, turns that hit the iteration cap — optionally pushing a
+short digest to Telegram (`--telegram`). It is **not** a scheduled task
+and deliberately has no automation around it: this project's "Claude
+reviews usage and builds new tools" workflow stays on-request and
+human-reviewed by design (see `tools/CONTRIBUTING.md`), so this script
+only does the read-only aggregation step — run it manually
+(`python chat_log_review.py`) whenever it's worth asking what the agent
+has actually been used for lately.
+
 Credentials live in gitignored `{name}_auth.json` files at the repo root
 (`telegram_auth.json`, `finnhub_auth.json`, `reddit_auth.json`) — see
 `tools/CONTRIBUTING.md` for the pattern. Every monitor that sends
