@@ -1,11 +1,13 @@
 import concurrent.futures
 import hashlib
+import time
 
 import streamlit as st
 import ollama
 
 from config import KEEP_ALIVE, MODEL, NUM_CTX
 from tool_registry import load_tools
+from tools import chat_log
 from tools.voice_input import transcribe
 
 st.set_page_config(page_title="Home Agent", page_icon="🤖")
@@ -57,21 +59,37 @@ def _execute_tool(call):
     other main-thread-only API. Every tool module either does pure network
     I/O or, for shared local state (tools/memory.py), its own internal
     locking — see that module's comments for why that matters now that
-    calls in the same turn can run concurrently."""
+    calls in the same turn can run concurrently.
+
+    Returns a dict — {"name", "args", "content", "error"} — rather than a
+    bare string: "content" is always what gets sent back to the model
+    (the tool's return value, or an error string on failure, since the
+    model needs to see failures to retry per SYSTEM_PROMPT), while "error"
+    keeps that same information available separately so chat_log.py can
+    record failures distinctly instead of string-sniffing content later."""
     name = call["function"]["name"]
     args = call["function"]["arguments"]
     func = dispatch.get(name)
     if func is None:
-        return f"Unknown tool: {name}"
+        content = f"Unknown tool: {name}"
+        return {"name": name, "args": args, "content": content, "error": content}
     try:
-        return func(**args)
+        result = func(**args)
+        return {"name": name, "args": args, "content": str(result), "error": None}
     except Exception as e:
-        return f"Tool {name} failed: {e}"
+        content = f"Tool {name} failed: {e}"
+        return {"name": name, "args": args, "content": content, "error": content}
 
 
 def run_turn(messages):
-    """Call the model, executing any tool calls, until it returns a final answer."""
-    for _ in range(MAX_TOOL_ITERATIONS):
+    """Call the model, executing any tool calls, until it returns a final
+    answer. Logs the whole turn via chat_log.log_turn on every exit path —
+    see that module for why."""
+    user_message = messages[-1].get("content", "") if messages else ""
+    start = time.time()
+    all_tool_results = []
+
+    for iteration in range(MAX_TOOL_ITERATIONS):
         response = ollama.chat(
             model=MODEL,
             messages=messages,
@@ -84,7 +102,9 @@ def run_turn(messages):
 
         tool_calls = msg.get("tool_calls")
         if not tool_calls:
-            return msg.get("content", "")
+            reply = msg.get("content", "")
+            chat_log.log_turn(user_message, all_tool_results, reply, iteration + 1, time.time() - start)
+            return reply
 
         names = ", ".join(call["function"]["name"] for call in tool_calls)
         with st.spinner(f"Running {names}..."):
@@ -98,12 +118,15 @@ def run_turn(messages):
             # order tool_calls arrived in even though they didn't finish
             # in that order.
             with concurrent.futures.ThreadPoolExecutor(max_workers=len(tool_calls)) as executor:
-                results = list(executor.map(_execute_tool, tool_calls))
+                tool_results = list(executor.map(_execute_tool, tool_calls))
 
-        for result in results:
-            messages.append({"role": "tool", "content": str(result)})
+        for tr in tool_results:
+            messages.append({"role": "tool", "content": tr["content"]})
+        all_tool_results.extend(tool_results)
 
-    return "I wasn't able to finish that after several tool calls — could you rephrase or simplify the request?"
+    reply = "I wasn't able to finish that after several tool calls — could you rephrase or simplify the request?"
+    chat_log.log_turn(user_message, all_tool_results, reply, MAX_TOOL_ITERATIONS, time.time() - start, hit_max_iterations=True)
+    return reply
 
 
 def handle_user_message(prompt):
