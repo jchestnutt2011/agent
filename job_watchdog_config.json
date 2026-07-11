@@ -9,6 +9,11 @@
       "name": "Daily Briefing",
       "log_file": "briefing_run.log",
       "max_staleness_minutes": 1560
+    },
+    {
+      "name": "Chat Log Rotate",
+      "log_file": "chat_log_rotate.log",
+      "max_staleness_minutes": 10800
     }
   ]
 }
